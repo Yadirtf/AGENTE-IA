@@ -38,6 +38,38 @@ def detectar_emergencia(texto: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# 1b. Límites del agente: pedidos que solo un abogado puede atender
+# ---------------------------------------------------------------------------
+LIMITES = [
+    (r"\b(representarme|representeme|representar(me)? en|defiendame|defenderme en|sea mi abogad\w*|lleve mi (caso|proceso))\b",
+     "representacion", "Amparo no puede representarle ni actuar como su abogado."),
+    (r"\b(redact\w*|haga\w*|escrib\w*|elabor\w*) (me )?(la |una )?(demanda|contestacion|denuncia penal formal|recurso de casacion|alegatos?)\b",
+     "demanda", "Amparo prepara borradores sencillos (petición, tutela, reclamos), no demandas ni escritos de procesos judiciales."),
+    (r"\b(voy a ganar|ganare|garantiz\w*|seguro (que )?(gano|me dan)|cuantos anos me dan|que pena me (dan|van a dar)|salgo libre)\b",
+     "pronostico", "Amparo no puede predecir el resultado de un proceso ni garantizar resultados."),
+    (r"\b(como (evado|evadir|escondo|esconder|oculto|ocultar)|evadir (impuestos|la justicia)|no pagar la cuota sin que|falsific\w*)\b",
+     "ilicito", "Amparo no orienta sobre cómo evadir obligaciones legales ni ocultar hechos a la justicia."),
+]
+
+
+def detectar_limite(texto: str) -> dict | None:
+    t = normalizar(texto)
+    for patron, tipo, mensaje in LIMITES:
+        if re.search(patron, t):
+            return {"tipo": tipo, "mensaje": mensaje}
+    return None
+
+
+def remision(entidades_cita: list[dict], limite: dict | None) -> dict:
+    """Cierre obligatorio de cada respuesta: límites + remisión al consultorio."""
+    texto = ("Esta es una orientación general: Amparo no reemplaza la asesoría de un abogado. "
+             "Para estudiar su caso concreto, agende una cita gratuita con el consultorio jurídico.")
+    if limite:
+        texto = limite["mensaje"] + " " + texto
+    return {"texto": texto, "limite": limite, "entidades": entidades_cita}
+
+
+# ---------------------------------------------------------------------------
 # 2. Semáforo de urgencia (reglas explicables)
 # ---------------------------------------------------------------------------
 SENALES = {
@@ -106,7 +138,8 @@ REGLAS:
 1. Usa SOLO la información de las FUENTES. Si no alcanza, dilo y recomienda un consultorio jurídico gratuito o la Personería.
 2. Cita las fuentes con [1], [2]... justo después de la idea que respaldan. Nunca inventes números de leyes, artículos ni plazos.
 3. Si faltan datos clave del caso, haz UNA pregunta concreta al final.
-4. No prometas resultados. No pidas datos sensibles innecesarios.
+4. No prometas resultados ni predigas fallos. No representas a nadie ni redactas demandas. No pidas datos sensibles innecesarios.
+5. Recuerda que el sistema añadirá al final la remisión al consultorio jurídico; no la repitas.
 
 FORMATO (markdown breve, máximo ~220 palabras):
 **En pocas palabras:** una o dos frases con la orientación principal.
@@ -121,12 +154,16 @@ ESTILO = {
 
 
 def construir_mensajes(pregunta: str, fragmentos: list[dict], historial: list[dict],
-                       area: dict | None, modo: str) -> list[dict]:
+                       area: dict | None, modo: str, limite: dict | None = None) -> list[dict]:
     bloques = []
     for i, f in enumerate(fragmentos, 1):
         bloques.append(f"[{i}] {f['titulo']} — {f['seccion']} ({f['fuente']})\n{f['contenido']}")
     contexto = "\n\n".join(bloques) if bloques else "(sin fuentes relevantes)"
     area_txt = f"Área probable del caso: {area['nombre']}." if area else ""
+    if limite:
+        area_txt += (f"\nATENCIÓN, LÍMITE: la persona pide algo fuera de tu alcance ({limite['mensaje']}). "
+                     "Explícalo con amabilidad al inicio, ofrece la orientación general que sí puedes dar "
+                     "y remite al consultorio jurídico.")
     mensajes = [{"role": "system", "content": SISTEMA + "\n\nESTILO: " + ESTILO.get(modo, ESTILO["sencillo"])}]
     for m in historial[-6:]:
         mensajes.append({"role": "user" if m["rol"] == "usuario" else "assistant", "content": m["contenido"]})

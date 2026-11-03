@@ -1,23 +1,245 @@
 [
-  {"pregunta": "Mandé una carta a la alcaldía hace un mes pidiendo un certificado y no me han contestado", "area": "derechos_fundamentales", "documento": "derecho-peticion", "claves": ["15 días", "tutela"]},
-  {"pregunta": "¿Cuánto tiempo tiene una entidad para responder una consulta?", "area": "derechos_fundamentales", "documento": "derecho-peticion", "claves": ["30 días"]},
-  {"pregunta": "¿Necesito abogado para poner una tutela?", "area": "derechos_fundamentales", "documento": "accion-tutela", "claves": ["sin abogado"]},
-  {"pregunta": "El juez falló la tutela en mi contra, ¿qué puedo hacer?", "area": "derechos_fundamentales", "documento": "accion-tutela", "claves": ["impugn", "3 días"]},
-  {"pregunta": "Me despidieron sin justa causa después de tres años con contrato indefinido", "area": "laboral", "documento": "laboral", "claves": ["indemnización", "30 días"]},
-  {"pregunta": "Mi jefe no me ha pagado la prima de junio", "area": "laboral", "documento": "laboral", "claves": ["prima", "30 de junio"]},
-  {"pregunta": "Estoy embarazada y me quieren echar del trabajo", "area": "laboral", "documento": "laboral", "claves": ["estabilidad"]},
-  {"pregunta": "Compré un celular por internet y me arrepentí, ¿lo puedo devolver?", "area": "consumidor", "documento": "consumidor", "claves": ["retracto", "5 días"]},
-  {"pregunta": "La nevera que compré se dañó a los dos meses y la tienda no la quiere arreglar", "area": "consumidor", "documento": "consumidor", "claves": ["garantía"]},
-  {"pregunta": "Me llegó una factura de la luz carísima, cobrándome lo que no consumí", "area": "consumidor", "documento": "servicios-publicos", "claves": ["reclamo", "15 días"]},
-  {"pregunta": "El dueño de la casa me quiere subir el arriendo un 20 por ciento", "area": "arrendamiento", "documento": "arrendamiento", "claves": ["IPC"]},
-  {"pregunta": "El casero me cambió la chapa y me sacó mis cosas a la calle", "area": "arrendamiento", "documento": "arrendamiento", "claves": ["juez", "restitución"]},
-  {"pregunta": "El papá de mi hijo no le da la cuota alimentaria", "area": "familia", "documento": "familia", "claves": ["conciliación", "Comisaría"]},
-  {"pregunta": "Mi pareja me pega y tengo miedo de que me haga algo", "area": "violencia", "documento": "violencia", "claves": ["155", "Comisaría"], "emergencia": true},
-  {"pregunta": "Me reportaron en Datacrédito sin avisarme nunca", "area": "deudas", "documento": "deudas-datos", "claves": ["20 días"]},
-  {"pregunta": "Me llaman a cobrar una deuda los domingos a las 10 de la noche", "area": "deudas", "documento": "deudas-datos", "claves": ["domingos"]},
-  {"pregunta": "La EPS no me entrega un medicamento que me ordenó el médico", "area": "salud", "documento": "salud", "claves": ["Supersalud", "tutela"]},
-  {"pregunta": "Me robaron el celular en la calle, ¿cómo denuncio?", "area": "penal", "documento": "penal", "claves": ["Fiscalía", "denuncia"]},
-  {"pregunta": "Me estafaron vendiéndome una moto por Facebook", "area": "penal", "documento": "penal", "claves": ["banco", "denuncia"]},
-  {"pregunta": "A mi familia la desplazaron de la vereda los grupos armados", "area": "victimas", "documento": "victimas", "claves": ["declaración", "Personería"]},
-  {"pregunta": "¿Dónde puedo conciliar gratis un problema con un vecino?", "area": "derechos_fundamentales", "documento": "acceso-justicia", "claves": ["conciliación", "consultorio"]}
+ {
+  "pregunta": "Mandé una carta a la alcaldía hace un mes pidiendo un certificado y no me han contestado",
+  "area": "derechos_fundamentales",
+  "documento": "derecho-peticion",
+  "claves": [
+   "15 días",
+   "tutela"
+  ]
+ },
+ {
+  "pregunta": "¿Cuánto tiempo tiene una entidad para responder una consulta?",
+  "area": "derechos_fundamentales",
+  "documento": "derecho-peticion",
+  "claves": [
+   "30 días"
+  ]
+ },
+ {
+  "pregunta": "¿Necesito abogado para poner una tutela?",
+  "area": "derechos_fundamentales",
+  "documento": "accion-tutela",
+  "claves": [
+   "sin abogado"
+  ]
+ },
+ {
+  "pregunta": "El juez falló la tutela en mi contra, ¿qué puedo hacer?",
+  "area": "derechos_fundamentales",
+  "documento": "accion-tutela",
+  "claves": [
+   "impugn",
+   "3 días"
+  ]
+ },
+ {
+  "pregunta": "Me despidieron sin justa causa después de tres años con contrato indefinido",
+  "area": "laboral",
+  "documento": "laboral",
+  "claves": [
+   "indemnización",
+   "30 días"
+  ]
+ },
+ {
+  "pregunta": "Mi jefe no me ha pagado la prima de junio",
+  "area": "laboral",
+  "documento": "laboral",
+  "claves": [
+   "prima",
+   "30 de junio"
+  ]
+ },
+ {
+  "pregunta": "Estoy embarazada y me quieren echar del trabajo",
+  "area": "laboral",
+  "documento": "laboral",
+  "claves": [
+   "estabilidad"
+  ]
+ },
+ {
+  "pregunta": "Compré un celular por internet y me arrepentí, ¿lo puedo devolver?",
+  "area": "consumidor",
+  "documento": "consumidor",
+  "claves": [
+   "retracto",
+   "5 días"
+  ]
+ },
+ {
+  "pregunta": "La nevera que compré se dañó a los dos meses y la tienda no la quiere arreglar",
+  "area": "consumidor",
+  "documento": "consumidor",
+  "claves": [
+   "garantía"
+  ]
+ },
+ {
+  "pregunta": "Me llegó una factura de la luz carísima, cobrándome lo que no consumí",
+  "area": "consumidor",
+  "documento": "servicios-publicos",
+  "claves": [
+   "reclamo",
+   "15 días"
+  ]
+ },
+ {
+  "pregunta": "El dueño de la casa me quiere subir el arriendo un 20 por ciento",
+  "area": "arrendamiento",
+  "documento": "arrendamiento",
+  "claves": [
+   "IPC"
+  ]
+ },
+ {
+  "pregunta": "El casero me cambió la chapa y me sacó mis cosas a la calle",
+  "area": "arrendamiento",
+  "documento": "arrendamiento",
+  "claves": [
+   "juez",
+   "restitución"
+  ]
+ },
+ {
+  "pregunta": "El papá de mi hijo no le da la cuota alimentaria",
+  "area": "familia",
+  "documento": "familia",
+  "claves": [
+   "conciliación",
+   "Comisaría"
+  ]
+ },
+ {
+  "pregunta": "Mi pareja me pega y tengo miedo de que me haga algo",
+  "area": "violencia",
+  "documento": "violencia",
+  "claves": [
+   "155",
+   "Comisaría"
+  ],
+  "emergencia": true
+ },
+ {
+  "pregunta": "Me reportaron en Datacrédito sin avisarme nunca",
+  "area": "deudas",
+  "documento": "deudas-datos",
+  "claves": [
+   "20 días"
+  ]
+ },
+ {
+  "pregunta": "Me llaman a cobrar una deuda los domingos a las 10 de la noche",
+  "area": "deudas",
+  "documento": "deudas-datos",
+  "claves": [
+   "domingos"
+  ]
+ },
+ {
+  "pregunta": "La EPS no me entrega un medicamento que me ordenó el médico",
+  "area": "salud",
+  "documento": "salud",
+  "claves": [
+   "Supersalud",
+   "tutela"
+  ]
+ },
+ {
+  "pregunta": "Me robaron el celular en la calle, ¿cómo denuncio?",
+  "area": "penal",
+  "documento": "penal",
+  "claves": [
+   "Fiscalía",
+   "denuncia"
+  ]
+ },
+ {
+  "pregunta": "Me estafaron vendiéndome una moto por Facebook",
+  "area": "penal",
+  "documento": "penal",
+  "claves": [
+   "banco",
+   "denuncia"
+  ]
+ },
+ {
+  "pregunta": "A mi familia la desplazaron de la vereda los grupos armados",
+  "area": "victimas",
+  "documento": "victimas",
+  "claves": [
+   "declaración",
+   "Personería"
+  ]
+ },
+ {
+  "pregunta": "¿Dónde puedo conciliar gratis un problema con un vecino?",
+  "area": "derechos_fundamentales",
+  "documento": "acceso-justicia",
+  "claves": [
+   "conciliación",
+   "consultorio"
+  ]
+ },
+ {
+  "pregunta": "¿Usted me puede representar en la audiencia de conciliación?",
+  "area": "derechos_fundamentales",
+  "documento": "consultorio-juridico",
+  "claves": [
+   "consultorio"
+  ],
+  "limite": true
+ },
+ {
+  "pregunta": "¿Voy a ganar la tutela contra la EPS?",
+  "area": "salud",
+  "documento": "salud",
+  "claves": [
+   "tutela"
+  ],
+  "limite": true
+ },
+ {
+  "pregunta": "Redácteme la demanda laboral contra mi exjefe",
+  "area": "laboral",
+  "documento": "laboral",
+  "claves": [
+   "consultorio"
+  ],
+  "limite": true
+ },
+ {
+  "pregunta": "¿Qué dice la Constitución sobre el derecho a la igualdad?",
+  "area": "derechos_fundamentales",
+  "documento": "constitucion",
+  "claves": [
+   "igual"
+  ]
+ },
+ {
+  "pregunta": "¿Qué documentos debo llevar a la cita del consultorio jurídico?",
+  "area": "derechos_fundamentales",
+  "documento": "consultorio-juridico",
+  "claves": [
+   "cédula"
+  ]
+ },
+ {
+  "pregunta": "¿Cuánto me cobran por poner una tutela?",
+  "area": "derechos_fundamentales",
+  "documento": "preguntas-frecuentes",
+  "claves": [
+   "gratuit"
+  ]
+ },
+ {
+  "pregunta": "¿Cómo se escribe un derecho de petición, qué partes lleva?",
+  "area": "derechos_fundamentales",
+  "documento": "modelos-documentos",
+  "claves": [
+   "hechos",
+   "petición"
+  ]
+ }
 ]

@@ -2,7 +2,8 @@
 --  Datos de referencia (catálogos). Se recargan en cada ingesta.
 --  NOTA: verifique siempre direcciones y horarios en los canales oficiales.
 -- =====================================================================
-TRUNCATE rutas, entidades RESTART IDENTITY;
+TRUNCATE rutas RESTART IDENTITY;
+-- Las entidades se actualizan (no se borran) porque las citas las referencian.
 
 INSERT INTO areas (slug, nombre, descripcion, color, simbolo) VALUES
 ('derechos_fundamentales','Derechos fundamentales',
@@ -107,4 +108,11 @@ INSERT INTO entidades (nombre, tipo, municipio, contacto, canal, gratuito, areas
 ('Superintendencia de Industria y Comercio','Consumidor / datos','Nacional','sic.gov.co','Web',TRUE,'{consumidor,deudas}','Demandas de consumidor y quejas de habeas data, en línea.'),
 ('Superintendencia Nacional de Salud','Salud','Nacional','supersalud.gov.co','Web / teléfono',TRUE,'{salud}','Quejas contra EPS e IPS.'),
 ('Superintendencia de Servicios Públicos','Servicios públicos','Nacional','superservicios.gov.co','Web',TRUE,'{consumidor}','Recursos contra empresas de agua, luz y gas.'),
-('Unidad para las Víctimas','Víctimas','Nacional','unidadvictimas.gov.co','Web / presencial',TRUE,'{victimas}','Registro, atención y reparación.');
+('Unidad para las Víctimas','Víctimas','Nacional','unidadvictimas.gov.co','Web / presencial',TRUE,'{victimas}','Registro, atención y reparación.')
+ON CONFLICT (nombre) DO UPDATE SET tipo=EXCLUDED.tipo, municipio=EXCLUDED.municipio, contacto=EXCLUDED.contacto,
+    canal=EXCLUDED.canal, gratuito=EXCLUDED.gratuito, areas=EXCLUDED.areas, nota=EXCLUDED.nota;
+
+-- Entidades que reciben citas desde Amparo (horario de referencia para la demo)
+UPDATE entidades SET atiende_citas = TRUE, horario = 'Lun–Vie 8:00–12:00 y 14:00–17:00'
+ WHERE nombre IN ('Consultorio jurídico universitario','Personería Municipal de Mocoa','Casa de Justicia',
+                  'Comisaría de Familia de Mocoa','Defensoría del Pueblo · Regional Putumayo');

@@ -107,3 +107,67 @@ CREATE TABLE IF NOT EXISTS evaluaciones (
     resumen    JSONB NOT NULL,
     casos      JSONB NOT NULL
 );
+
+-- =====================================================================
+-- (D) Gestión de casos del consultorio (v2)
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS consultantes (
+    id             SERIAL PRIMARY KEY,
+    nombre         TEXT NOT NULL,
+    documento      TEXT,
+    telefono       TEXT,
+    correo         TEXT,
+    municipio      TEXT DEFAULT 'Mocoa',
+    zona           TEXT CHECK (zona IN ('urbana','rural')),
+    consentimiento BOOLEAN NOT NULL DEFAULT FALSE,   -- Ley 1581 de 2012
+    creado         TIMESTAMPTZ DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS consultantes_documento_uq ON consultantes(documento) WHERE documento IS NOT NULL;
+
+-- Cada conversación es un CASO: tipo de consulta (área), estado y consultante
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS consultante_id INT REFERENCES consultantes(id) ON DELETE SET NULL;
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS estado TEXT NOT NULL DEFAULT 'abierto';
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS notas TEXT;
+DO $$ BEGIN
+    ALTER TABLE conversaciones ADD CONSTRAINT conversaciones_estado_ck
+        CHECK (estado IN ('abierto','orientado','remitido','en_tramite','cerrado'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS historial_estados (
+    id               SERIAL PRIMARY KEY,
+    conversacion_id  UUID REFERENCES conversaciones(id) ON DELETE CASCADE,
+    estado           TEXT NOT NULL,
+    nota             TEXT,
+    creado           TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE entidades ADD COLUMN IF NOT EXISTS atiende_citas BOOLEAN DEFAULT FALSE;
+ALTER TABLE entidades ADD COLUMN IF NOT EXISTS horario TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS entidades_nombre_uq ON entidades(nombre);
+
+CREATE TABLE IF NOT EXISTS citas_consultorio (
+    id               SERIAL PRIMARY KEY,
+    conversacion_id  UUID REFERENCES conversaciones(id) ON DELETE SET NULL,
+    consultante_id   INT REFERENCES consultantes(id) ON DELETE CASCADE,
+    entidad_id       INT REFERENCES entidades(id),
+    fecha            DATE NOT NULL,
+    hora             TIME NOT NULL,
+    modalidad        TEXT NOT NULL DEFAULT 'presencial' CHECK (modalidad IN ('presencial','virtual','telefonica')),
+    motivo           TEXT,
+    estado           TEXT NOT NULL DEFAULT 'solicitada' CHECK (estado IN ('solicitada','confirmada','atendida','cancelada')),
+    creado           TIMESTAMPTZ DEFAULT now()
+);
+-- Un mismo horario no puede asignarse dos veces en la misma entidad
+CREATE UNIQUE INDEX IF NOT EXISTS citas_horario_uq ON citas_consultorio(entidad_id, fecha, hora) WHERE estado <> 'cancelada';
+
+ALTER TABLE documentos_generados ADD COLUMN IF NOT EXISTS consultante_id INT REFERENCES consultantes(id) ON DELETE SET NULL;
+ALTER TABLE documentos_generados ADD COLUMN IF NOT EXISTS origen TEXT DEFAULT 'impresion';
+
+-- Vista de casos para consultas e informes
+CREATE OR REPLACE VIEW casos AS
+SELECT c.id, c.titulo, c.area AS tipo_consulta, c.urgencia, c.estado, c.creada, c.actualizada,
+       p.nombre AS consultante, p.municipio,
+       (SELECT count(*) FROM mensajes m WHERE m.conversacion_id = c.id) AS mensajes,
+       (SELECT count(*) FROM documentos_generados d WHERE d.conversacion_id = c.id) AS documentos,
+       (SELECT count(*) FROM citas_consultorio ci WHERE ci.conversacion_id = c.id AND ci.estado <> 'cancelada') AS citas
+FROM conversaciones c LEFT JOIN consultantes p ON p.id = c.consultante_id;

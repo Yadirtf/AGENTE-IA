@@ -103,6 +103,24 @@
         <p>Notificaciones: ${v(c.contacto, "correo o dirección")}.</p>
         <div class="firma">${v(c.nombre, "Nombre")}<br>C.C. ${v(c.cedula, "número")}</div>`,
     },
+    {
+      id: "conciliacion", nombre: "Solicitud de conciliación", desc: "Ley 2220/2022",
+      campos: [...comunes,
+        { id: "destinatario", label: "Centro de conciliación", ph: "Consultorio jurídico / Comisaría de Familia" },
+        { id: "convocado", label: "Persona a citar (nombre y dirección)", ph: "Nombre, dirección y teléfono" },
+        { id: "hechos", label: "Hechos", tipo: "area", ph: "Describa el conflicto…" },
+        { id: "peticion", label: "Qué propone o pretende", tipo: "area", ph: "Fijar una cuota alimentaria de… / un plan de pagos…" }],
+      render: (c) => `
+        <p>${v(c.ciudad, "Ciudad")}, ${hoy()}</p>
+        <p>Señores<br><b>${v(c.destinatario, "Centro de conciliación")}</b></p>
+        <p><b>Asunto:</b> Solicitud de audiencia de conciliación (Ley 2220 de 2022).</p>
+        <p><b>Convocante:</b> ${v(c.nombre, "nombre completo")}, C.C. ${v(c.cedula, "número")}.<br><b>Convocado(a):</b> ${v(c.convocado, "nombre y dirección de la otra parte")}.</p>
+        <p>Solicito respetuosamente se fije fecha y hora para celebrar audiencia de conciliación con fundamento en los siguientes:</p>
+        <h4>Hechos</h4>${parrafos(c.hechos, "Hechos del conflicto")}
+        <h4>Pretensiones</h4>${parrafos(c.peticion, "Lo que propone")}
+        <h4>Notificaciones</h4><p>Convocante: ${v(c.contacto, "correo o dirección")}.</p>
+        <div class="firma">${v(c.nombre, "Nombre")}<br>C.C. ${v(c.cedula, "número")}</div>`,
+    },
   ];
 
   window.Plantillas = PLANTILLAS;

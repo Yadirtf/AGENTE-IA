@@ -48,7 +48,7 @@
   <button role="tab" data-vista="terminos">Términos</button>
   <button role="tab" data-vista="directorio">Directorio</button>
   <button role="tab" data-vista="laboratorio">Laboratorio</button>
-  <button role="tab" data-vista="archivo">Archivo</button>
+  <button role="tab" data-vista="casos">Casos</button>
 </nav>
 
 <main>
@@ -61,6 +61,11 @@
         <div class="caratula__num">Expediente <b id="exp-num">—</b></div>
         <div class="caratula__area" id="exp-area"><span class="vacio">Sin clasificar</span></div>
         <div id="exp-estampa" class="estampa" hidden></div>
+      </div>
+      <div class="bloque consultante-bloque">
+        <h3>Consultante · estado</h3>
+        <div id="exp-consultante" class="consultante-mini"><button class="chip-btn" id="btn-consultante" type="button">＋ Registrar consultante</button></div>
+        <div class="estado-caso" id="exp-estado" data-estado="abierto"><span>abierto</span></div>
       </div>
       <div class="bloque">
         <h3>Urgencia</h3>
@@ -213,13 +218,44 @@
   </div>
 </section>
 
-<!-- ===================== ARCHIVO ===================== -->
-<section class="vista" id="vista-archivo">
-  <p class="sobretitulo">Archivo</p>
-  <h2 class="titulo-seccion">Consultas <em>anteriores.</em></h2>
-  <div class="archivo" id="archivo"></div>
+<!-- ===================== CASOS ===================== -->
+<section class="vista" id="vista-casos">
+  <div class="casos-cab">
+    <div>
+      <p class="sobretitulo">Gestión de casos del consultorio</p>
+      <h2 class="titulo-seccion">Cada caso, <em>en su estado.</em></h2>
+    </div>
+    <button class="btn btn--sello" id="btn-nuevo-caso">＋ Nuevo expediente</button>
+  </div>
+  <p class="nota">Arrastre las carpetas entre columnas para cambiar el estado. Todo queda registrado en PostgreSQL con su historial.</p>
+  <div class="tablero" id="tablero"></div>
+  <h3 class="subtitulo-agenda">Agenda de citas con el consultorio jurídico</h3>
+  <div class="agenda" id="agenda"></div>
 </section>
 </main>
+
+<!-- ===================== Diálogo: consultante ===================== -->
+<dialog class="dialogo" id="dlg-consultante">
+  <form method="dialog" id="form-consultante" class="dialogo__cuerpo">
+    <p class="sobretitulo">Ficha del consultante</p>
+    <h3 class="dialogo__titulo">¿Con quién <em>hablamos?</em></h3>
+    <div class="rejilla-2">
+      <label class="campo"><span>Nombre completo *</span><input name="nombre" required></label>
+      <label class="campo"><span>Documento</span><input name="documento" placeholder="C.C."></label>
+      <label class="campo"><span>Teléfono</span><input name="telefono" inputmode="tel"></label>
+      <label class="campo"><span>Correo</span><input name="correo" type="email"></label>
+      <label class="campo"><span>Municipio</span><input name="municipio" value="Mocoa"></label>
+      <label class="campo"><span>Zona</span><select name="zona"><option value="urbana">Urbana</option><option value="rural">Rural</option></select></label>
+    </div>
+    <label class="consentimiento"><input type="checkbox" name="consentimiento" required> Autorizo el tratamiento de mis datos personales para recibir orientación y agendar citas (Ley 1581 de 2012).</label>
+    <div class="dialogo__acciones"><button class="btn" value="cancelar" formnovalidate>Cancelar</button><button class="btn btn--tinta" value="ok">Guardar</button></div>
+  </form>
+</dialog>
+
+<!-- ===================== Diálogo: cita ===================== -->
+<dialog class="dialogo dialogo--ancho" id="dlg-cita">
+  <div class="dialogo__cuerpo" id="cita-cuerpo"></div>
+</dialog>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
