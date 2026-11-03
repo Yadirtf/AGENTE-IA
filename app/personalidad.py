@@ -349,3 +349,70 @@ def segmentar_texto(texto: str) -> list[dict]:
         segmentos.append({"emocion": e, "texto": _limpiar(f)})
         previa = e
     return segmentos
+
+
+# ---------------------------------------------------------------------------
+# 5. Llamada en vivo: respuestas habladas, cortas y por frases
+# ---------------------------------------------------------------------------
+LLAMADA = """Eres AMPARO en una LLAMADA EN VIVO con {quien}, que vive en Colombia (Putumayo). Hablas como una
+persona real por teléfono: cálida, alegre, paciente, con trato de "usted". Tu respuesta se convierte en voz
+frase por frase, así que:
+
+- Responde en 2 a 4 frases cortas (máximo 60 palabras). Nada de listas, viñetas, markdown ni citas [n].
+- Usa SOLO la información de las FUENTES. Puedes nombrar la norma de forma natural ("según la Ley 1755…").
+- Si falta un dato importante, termina con UNA pregunta corta.
+- Si el caso necesita un abogado, invita con amabilidad a agendar la cita gratuita en el consultorio jurídico.
+- No eres abogada: no representas, no prometes resultados y no pides cédula ni teléfono.
+- Si no es un tema legal, dilo con amabilidad en una frase y vuelve al tema.
+
+Escribe UNA frase por línea y empieza cada línea con su emoción entre corchetes:
+[alegre] [animada] [calida] [tranquila] [seria]"""
+
+_ETIQUETA = re.compile(r"(?=\[(?:alegre|animada|calida|cálida|tranquila|seria)\])", re.I)
+
+
+def mensajes_llamada(pregunta: str, fragmentos: list[dict], historial: list[dict], nombre: str | None) -> list[dict]:
+    quien = nombre or "la persona"
+    # El prompt del sistema no cambia entre turnos: Ollama reutiliza su caché y responde antes.
+    mensajes = [{"role": "system", "content": LLAMADA.format(quien=quien)}]
+    for m in historial[-6:]:
+        mensajes.append({"role": "user" if m["rol"] == "usuario" else "assistant", "content": m["contenido"]})
+    fuentes = "\n".join(f"- {f['titulo']} ({f['fuente']}): {f['contenido'][:380]}" for f in fragmentos)
+    mensajes.append({"role": "user", "content": f"FUENTES:\n{fuentes or '(sin fuentes)'}\n\nLO QUE DICE {quien.upper()}:\n{pregunta}"})
+    return mensajes
+
+
+class Frases:
+    """Corta el texto que llega token a token en frases completas para hablarlas apenas estén listas."""
+
+    def __init__(self):
+        self.buffer, self.previa = "", None
+
+    def _armar(self, trozo: str) -> list[dict]:
+        salida = []
+        for s in parsear_guion(trozo):
+            if s["texto"] and not re.match(r"^\[", s["texto"]):
+                salida.append(s)
+                self.previa = s["emocion"]
+        return salida
+
+    def agregar(self, token: str) -> list[dict]:
+        self.buffer += token
+        partes = [p for linea in self.buffer.split("\n") for p in _ETIQUETA.split(linea)]
+        completas = []
+        if "\n" in self.buffer or len(partes) > 1:
+            *listas, self.buffer = re.split(r"\n|" + _ETIQUETA.pattern, self.buffer)
+            completas = [p for p in listas if p.strip()]
+        # Si el modelo no usa saltos de línea, corta en el fin de oración cuando la frase ya es larga.
+        if not completas and len(self.buffer) > 140:
+            m = re.search(r"^(.*?[.!?])\s+(.*)$", self.buffer, flags=re.S)
+            if m:
+                completas, self.buffer = [m.group(1)], m.group(2)
+        frases = []
+        for c in completas:
+            frases += self._armar(c)
+        return frases
+
+    def terminar(self) -> list[dict]:
+        resto, self.buffer = self.buffer, ""
+        return self._armar(resto) if resto.strip() else []

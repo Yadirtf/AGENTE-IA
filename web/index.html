@@ -46,6 +46,7 @@
 
 <nav class="pestanas" role="tablist">
   <button role="tab" data-vista="consulta" class="activa">Consulta</button>
+  <button role="tab" data-vista="llamada" class="pestana-llamada">Llamada <i class="vivo">en vivo</i></button>
   <button role="tab" data-vista="documentos">Documentos</button>
   <button role="tab" data-vista="terminos">Términos</button>
   <button role="tab" data-vista="directorio">Directorio</button>
@@ -235,6 +236,39 @@
   </div>
 </section>
 
+<!-- ===================== LLAMADA EN VIVO ===================== -->
+<section class="vista" id="vista-llamada">
+  <div class="llamada" data-fase="inactiva">
+    <div class="llamada__escena">
+      <p class="sobretitulo">Llamada en vivo · manos libres</p>
+      <div class="orbe" id="orbe">
+        <canvas id="orbe-lienzo" width="440" height="440" aria-hidden="true"></canvas>
+        <div class="orbe__avatar" aria-hidden="true">A</div>
+      </div>
+      <h2 class="llamada__nombre">Amparo</h2>
+      <p class="llamada__estado" id="llamada-estado" role="status" aria-live="polite">Lista para conversar</p>
+      <p class="llamada__reloj" id="llamada-reloj">00:00</p>
+      <div class="llamada__controles">
+        <button class="ctrl" id="ll-silenciar" type="button" hidden><span>🎙</span><small>Silenciar</small></button>
+        <button class="ctrl ctrl--llamar" id="ll-llamar" type="button"><span>📞</span><small>Llamar a Amparo</small></button>
+        <button class="ctrl ctrl--colgar" id="ll-colgar" type="button" hidden><span>📞</span><small>Colgar</small></button>
+        <button class="ctrl" id="ll-voz" type="button"><span>🗣</span><small>Voz</small></button>
+      </div>
+      <ul class="llamada__pistas">
+        <li><b>Hable con naturalidad.</b> Amparo detecta sola cuándo empieza y termina de hablar.</li>
+        <li><b>Interrúmpala cuando quiera.</b> Si habla mientras ella habla, se calla y le escucha.</li>
+        <li><b>Con audífonos</b> las interrupciones funcionan aún mejor.</li>
+      </ul>
+    </div>
+    <aside class="llamada__panel">
+      <div class="llamada__cab"><h3>Transcripción en vivo</h3><span id="ll-metricas" class="nota"></span></div>
+      <div class="subtitulos" id="ll-subtitulos"><p class="nota">Cuando empiece la llamada, aquí verá lo que usted dice y lo que responde Amparo, con las fuentes de cada respuesta.</p></div>
+      <div class="llamada__resumen" id="ll-resumen" hidden></div>
+      <p class="aviso">Amparo orienta; no reemplaza la asesoría de un abogado. Al colgar puede agendar una cita gratuita con el consultorio jurídico.</p>
+    </aside>
+  </div>
+</section>
+
 <!-- ===================== CASOS ===================== -->
 <section class="vista" id="vista-casos">
   <div class="casos-cab">
@@ -304,5 +338,6 @@
 <script src="/terminos.js"></script>
 <script src="/plantillas.js"></script>
 <script src="/app.js"></script>
+<script src="/llamada.js"></script>
 </body>
 </html>

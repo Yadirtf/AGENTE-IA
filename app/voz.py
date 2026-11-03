@@ -14,7 +14,7 @@ from pathlib import Path
 from . import config
 
 _lock = threading.Lock()
-_whisper = None
+_whisper: dict = {}
 
 
 def stt_disponible() -> bool:
@@ -25,13 +25,14 @@ def stt_disponible() -> bool:
         return False
 
 
-def _modelo_whisper():
-    global _whisper
+def _modelo_whisper(nombre: str | None = None):
+    """Carga perezosa; la llamada en vivo usa un modelo más rápido (WHISPER_LLAMADA) que la consulta."""
+    nombre = nombre or config.WHISPER_MODELO
     with _lock:
-        if _whisper is None:
+        if nombre not in _whisper:
             from faster_whisper import WhisperModel
-            _whisper = WhisperModel(config.WHISPER_MODELO, device="cpu", compute_type=config.WHISPER_COMPUTE)
-    return _whisper
+            _whisper[nombre] = WhisperModel(nombre, device="cpu", compute_type=config.WHISPER_COMPUTE)
+    return _whisper[nombre]
 
 
 def decodificar_audio(audio: bytes, frecuencia: int = 16000):
@@ -57,9 +58,9 @@ def decodificar_audio(audio: bytes, frecuencia: int = 16000):
     return np.concatenate(partes).astype(np.float32) / 32768.0
 
 
-def transcribir(audio: bytes) -> dict:
+def transcribir(audio: bytes, modelo_nombre: str | None = None) -> dict:
     t0 = time.perf_counter()
-    modelo = _modelo_whisper()
+    modelo = _modelo_whisper(modelo_nombre)
     muestras = decodificar_audio(audio)
     if muestras.size < 1600:                                # menos de 0,1 s de audio
         return {"texto": "", "duracion_audio": 0, "ms": round((time.perf_counter() - t0) * 1000)}

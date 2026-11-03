@@ -132,7 +132,7 @@ function agregarUsuario(texto, canal) {
   $("#bienvenida")?.remove();
   const d = document.createElement("div");
   d.className = "msg msg--usuario";
-  d.innerHTML = `<div class="burbuja">${esc(texto)}<span class="canal">${canal === "voz" ? "🎙 dictado por voz" : "escrito"}</span></div>`;
+  d.innerHTML = `<div class="burbuja">${esc(texto)}<span class="canal">${canal === "voz" ? "🎙 dictado por voz" : canal === "llamada" ? "📞 en llamada" : "escrito"}</span></div>`;
   hilo.appendChild(d); bajar();
 }
 
@@ -534,13 +534,13 @@ function pintarNotaVoz(nodo, guion) {
 const TIPOS = {
   saludo: "sobre mí", capacidades: "sobre mí", quien: "sobre mí", naturaleza: "sobre mí", creador: "sobre mí", costo: "sobre mí",
   privacidad: "sobre mí", fuentes: "sobre mí", voz: "sobre mí", gracias: "con gusto", despedida: "hasta pronto",
-  fuera_tema: "fuera de tema", aviso: "aviso de respeto", cierre: "cierre de la sesión",
+  fuera_tema: "fuera de tema", aviso: "aviso de respeto", cierre: "cierre de la sesión", llamada: "📞 llamada en vivo",
 };
 function marcarTipo(nodo, tipo) {
   if (!TIPOS[tipo]) return;
   const cab = $(".folio__cab span", nodo);
   if (cab) cab.textContent = `Amparo · ${TIPOS[tipo]}`;
-  $(".folio", nodo).classList.add(tipo === "aviso" || tipo === "cierre" ? "folio--aviso" : "folio--charla");
+  if (tipo !== "llamada") $(".folio", nodo).classList.add(tipo === "aviso" || tipo === "cierre" ? "folio--aviso" : "folio--charla");
 }
 
 /* ---------- Cierre de la sesión (lenguaje ofensivo) ---------- */
