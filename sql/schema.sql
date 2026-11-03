@@ -171,3 +171,16 @@ SELECT c.id, c.titulo, c.area AS tipo_consulta, c.urgencia, c.estado, c.creada, 
        (SELECT count(*) FROM documentos_generados d WHERE d.conversacion_id = c.id) AS documentos,
        (SELECT count(*) FROM citas_consultorio ci WHERE ci.conversacion_id = c.id AND ci.estado <> 'cancelada') AS citas
 FROM conversaciones c LEFT JOIN consultantes p ON p.id = c.consultante_id;
+
+-- ---------------------------------------------------------------------
+-- (v3) Personalidad, sesiones e historial
+-- ---------------------------------------------------------------------
+-- Nombre o apodo con el que la persona quiere que Amparo la llame (sin datos sensibles).
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS alias TEXT;
+-- Avisos por lenguaje ofensivo y cierre de la sesión.
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS advertencias INT NOT NULL DEFAULT 0;
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS bloqueada BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS motivo_cierre TEXT;
+-- Lo que Amparo dijo en voz (guion hablado con emoción por frase) y el tipo de respuesta.
+ALTER TABLE mensajes ADD COLUMN IF NOT EXISTS guion JSONB;
+ALTER TABLE mensajes ADD COLUMN IF NOT EXISTS tipo TEXT;  -- (agente) orientacion | identidad | fuera_tema | aviso | cierre

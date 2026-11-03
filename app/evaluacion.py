@@ -10,9 +10,10 @@ Opcionalmente (con_llm=True) mide cobertura de palabras clave en la respuesta.
 import json
 import time
 
-from . import config, db, llm, orientacion, rag
+from . import config, db, llm, orientacion, personalidad, rag
 
 CASOS = config.RAIZ / "eval" / "casos.json"
+PERSONALIDAD = config.RAIZ / "eval" / "personalidad.json"
 
 
 async def ejecutar(con_llm: bool = False) -> dict:
@@ -54,12 +55,22 @@ async def ejecutar(con_llm: bool = False) -> dict:
         "latencia_ms": round(sum(r["ms"] for r in resultados) / n),
         "modelo_embeddings": config.EMBED_MODELO,
     }
+    # Personalidad: preguntas sobre Amparo, temas no jurídicos y ofensas (reglas, sin LLM)
+    pers = json.loads(PERSONALIDAD.read_text(encoding="utf-8"))
+    aciertos = 0
+    for p in pers:
+        obtenido = ("ofensa" if personalidad.detectar_ofensa(p["texto"]) else
+                    personalidad.detectar_identidad(p["texto"]) or ("fuera_tema" if personalidad.fuera_de_tema(p["texto"]) else None))
+        p["obtenido"] = obtenido
+        aciertos += obtenido == p["esperado"]
+    resumen["personalidad"] = round(aciertos / len(pers), 3)
+    resumen["casos_personalidad"] = len(pers)
     if con_llm:
         resumen["cobertura_respuesta"] = round(sum(r["cobertura"] for r in resultados) / n, 3)
         resumen["modelo_llm"] = config.LLM_MODELO
     db.ejecutar("INSERT INTO evaluaciones (resumen, casos) VALUES (%s, %s)",
                 (json.dumps(resumen), json.dumps(resultados, ensure_ascii=False)))
-    return {"resumen": resumen, "casos": resultados}
+    return {"resumen": resumen, "casos": resultados, "personalidad": pers}
 
 
 def ultima() -> dict | None:

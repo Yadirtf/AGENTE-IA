@@ -62,10 +62,12 @@ def _detalle(r: httpx.Response) -> str:
         return r.text[:300]
 
 
-async def chat_stream(mensajes: list[dict]) -> AsyncIterator[str]:
+async def chat_stream(mensajes: list[dict], max_tokens: int | None = None,
+                      temperatura: float | None = None) -> AsyncIterator[str]:
     """Genera la respuesta token a token."""
+    temp = config.LLM_TEMPERATURA if temperatura is None else temperatura
     if config.LLM_PROVEEDOR == "openai":
-        async for t in _openai_stream(mensajes):
+        async for t in _openai_stream(mensajes, max_tokens, temp):
             yield t
         return
     cuerpo = {
@@ -73,8 +75,10 @@ async def chat_stream(mensajes: list[dict]) -> AsyncIterator[str]:
         "messages": mensajes,
         "stream": True,
         "keep_alive": "60m",
-        "options": {"temperature": config.LLM_TEMPERATURA, "num_ctx": config.LLM_CONTEXTO},
+        "options": {"temperature": temp, "num_ctx": config.LLM_CONTEXTO},
     }
+    if max_tokens:
+        cuerpo["options"]["num_predict"] = max_tokens
     async with httpx.AsyncClient(timeout=_timeout) as cli:
         async with cli.stream("POST", f"{config.OLLAMA_URL}/api/chat", json=cuerpo) as r:
             r.raise_for_status()
@@ -89,10 +93,11 @@ async def chat_stream(mensajes: list[dict]) -> AsyncIterator[str]:
                     break
 
 
-async def _openai_stream(mensajes: list[dict]) -> AsyncIterator[str]:
+async def _openai_stream(mensajes: list[dict], max_tokens: int | None, temp: float) -> AsyncIterator[str]:
     cabeceras = {"Authorization": f"Bearer {config.OPENAI_API_KEY}"}
-    cuerpo = {"model": config.LLM_MODELO, "messages": mensajes, "stream": True,
-              "temperature": config.LLM_TEMPERATURA}
+    cuerpo = {"model": config.LLM_MODELO, "messages": mensajes, "stream": True, "temperature": temp}
+    if max_tokens:
+        cuerpo["max_tokens"] = max_tokens
     async with httpx.AsyncClient(timeout=_timeout) as cli:
         async with cli.stream("POST", f"{config.OPENAI_BASE_URL}/chat/completions",
                               json=cuerpo, headers=cabeceras) as r:
@@ -108,8 +113,8 @@ async def _openai_stream(mensajes: list[dict]) -> AsyncIterator[str]:
                     yield delta["content"]
 
 
-async def completar(mensajes: list[dict]) -> str:
-    partes = [t async for t in chat_stream(mensajes)]
+async def completar(mensajes: list[dict], max_tokens: int | None = None, temperatura: float | None = None) -> str:
+    partes = [t async for t in chat_stream(mensajes, max_tokens, temperatura)]
     return "".join(partes)
 
 

@@ -6,11 +6,17 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const guardar = (k, v) => { try { localStorage.setItem(k, v); } catch (_) {} };
 const leer = (k) => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+const guardarSesion = (k, v) => { try { sessionStorage.setItem(k, v); } catch (_) {} };
+const leerSesion = (k) => { try { return sessionStorage.getItem(k); } catch (_) { return null; } };
 
 const estado = {
   conversacion: null, modo: "sencillo", vozAuto: leer("amparo-voz") !== "0", ocupado: false,
   fuentes: [], expediente: null, folio: 0, sistema: null, ultimoUsuario: [],
   caso: null,            // { estado, consultante_id, nombre, citas, ... }
+  alias: leerSesion("amparo-alias") || "",          // nombre o apodo (paso 1 de identificación)
+  vozId: leer("amparo-voz-id") || "",               // "piper:<id>" o "nav:<nombre de la voz del navegador>"
+  velocidad: parseFloat(leer("amparo-velocidad") || "1") || 1,
+  cerrada: false,
 };
 const ESTADOS = {
   abierto: "Abierto", orientado: "Orientado", remitido: "Remitido al consultorio", en_tramite: "En trámite", cerrado: "Cerrado",
@@ -30,6 +36,7 @@ async function api(ruta, opciones = {}) {
 /* ---------- Markdown mínimo con citas [n] ---------- */
 function md(texto) {
   const inline = (s) => esc(s)
+    .replace(/^\*\*([^*]+?:)\*\*/, '<strong class="rotulo">$1</strong>')   // "**En pocas palabras:**" = rótulo de sección
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
     .replace(/\[(\d{1,2})\]/g, '<span class="cita" data-n="$1" tabindex="0">$1</span>');
@@ -42,7 +49,7 @@ function md(texto) {
       const tipo = ul ? "ul" : "ol";
       if (lista !== tipo) { cerrar(); html += `<${tipo}>`; lista = tipo; }
       html += `<li>${inline((ul || ol)[1])}</li>`;
-    } else if (h) { cerrar(); html += `<p><strong>${inline(h[1])}</strong></p>`; }
+    } else if (h) { cerrar(); html += `<p><strong class="rotulo">${inline(h[1])}</strong></p>`; }
     else if (l.trim()) { cerrar(); html += `<p>${inline(l)}</p>`; }
     else cerrar();
   }
@@ -86,7 +93,7 @@ $$(".interruptor button").forEach((b) => b.addEventListener("click", () => {
 const btnVoz = $("#btn-voz-auto");
 const pintarVoz = () => { btnVoz.setAttribute("aria-pressed", estado.vozAuto); btnVoz.textContent = estado.vozAuto ? "🔊" : "🔈"; };
 pintarVoz();
-btnVoz.addEventListener("click", () => { estado.vozAuto = !estado.vozAuto; guardar("amparo-voz", estado.vozAuto ? "1" : "0"); pintarVoz(); toast(estado.vozAuto ? "Leeré las respuestas en voz alta" : "Respuestas solo en texto"); if (!estado.vozAuto) callar(); });
+btnVoz.addEventListener("click", () => { estado.vozAuto = !estado.vozAuto; guardar("amparo-voz", estado.vozAuto ? "1" : "0"); pintarVoz(); toast(estado.vozAuto ? "Le explicaré cada respuesta en voz alta" : "Respuestas solo en texto"); if (!estado.vozAuto) callar(); });
 
 /* =====================================================================
    Pestañas
@@ -175,6 +182,7 @@ async function* eventos(resp) {
 }
 
 async function enviar(texto, canal = "texto", msStt = null) {
+  if (estado.cerrada) return toast("Esta conversación se cerró. Recargue la página para empezar de nuevo.");
   if (estado.ocupado) return toast("Espere a que termine la respuesta anterior");
   estado.ocupado = true; $("#enviar").disabled = true; callar();
   if (canal !== "voz") reiniciarTuberia(canal);
@@ -182,17 +190,20 @@ async function enviar(texto, canal = "texto", msStt = null) {
   agregarUsuario(texto, canal);
   const nodo = nuevoFolio();
   const cuerpo = $(".folio__cuerpo", nodo);
-  let respuesta = "", primero = true, metricas = null, remisionDatos = null;
+  let respuesta = "", primero = true, metricas = null, remisionDatos = null, guion = null, tipoResp = "orientacion", cerrada = null;
   try {
     const resp = await fetch("/api/consulta", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texto, conversacion_id: estado.conversacion, modo: estado.modo, canal, ms_stt: msStt, consultante_id: estado.consultantePendiente?.id || null }),
+      body: JSON.stringify({ texto, conversacion_id: estado.conversacion, modo: estado.modo, canal, ms_stt: msStt, consultante_id: estado.consultantePendiente?.id || null, alias: estado.alias || null, voz: estado.vozAuto }),
     });
     if (!resp.ok) throw new Error(await resp.text());
     for await (const { tipo, datos } of eventos(resp)) {
       if (tipo === "conversacion") { estado.conversacion = datos.id; estado.consultantePendiente = null; $("#exp-num").textContent = numeroExpediente(datos.id); }
       else if (tipo === "limite") marcarLimite(nodo, datos);
       else if (tipo === "remision") remisionDatos = datos;
+      else if (tipo === "guion") guion = datos.segmentos;
+      else if (tipo === "tipo_respuesta") { tipoResp = datos.tipo; marcarTipo(nodo, datos.tipo); }
+      else if (tipo === "sesion_cerrada") cerrada = datos;
       else if (tipo === "etapa") etapa(datos.etapa, datos.estado, datos.ms);
       else if (tipo === "emergencia") mostrarEmergencia(datos);
       else if (tipo === "fuentes") pintarFuentes(datos);
@@ -205,13 +216,16 @@ async function enviar(texto, canal = "texto", msStt = null) {
       } else if (tipo === "fin") metricas = datos.metricas;
       else if (tipo === "error") throw new Error(datos.mensaje);
     }
+    if (cerrada && !respuesta) { nodo.remove(); cerrarSesion(cerrada.motivo); return; }
     cuerpo.innerHTML = md(respuesta);
     enlazarCitas(cuerpo);
+    if (guion?.length) pintarNotaVoz(nodo, guion);
     if (remisionDatos) pintarRemision(nodo, remisionDatos);
-    pieFolio(nodo, respuesta);
+    pieFolio(nodo, respuesta, guion, tipoResp);
     if (metricas) pintarMetricas(metricas);
     refrescarCaso();
-    if (estado.vozAuto && respuesta) hablar(respuesta);
+    if (estado.vozAuto && respuesta) hablar(guion?.length ? guion : respuesta, nodo);
+    if (cerrada) cerrarSesion(cerrada.motivo);
   } catch (err) {
     cuerpo.innerHTML = `<p><strong>No pude responder</strong></p><p>${esc(err.message)}</p>`;
     toast("Revise que Ollama y PostgreSQL estén encendidos");
@@ -225,14 +239,16 @@ function numeroExpediente(id) {
   return `${new Date().getFullYear()}-${String(n).padStart(4, "0")}`;
 }
 
-function pieFolio(nodo, texto) {
+function pieFolio(nodo, texto, guion, tipo = "orientacion") {
   const pie = document.createElement("div");
   pie.className = "folio__pie";
-  pie.innerHTML = `<button class="chip-btn" data-a="oir">▶ Escuchar</button><button class="chip-btn" data-a="copiar">Copiar</button><button class="chip-btn" data-a="doc">✎ Convertir en documento</button><button class="chip-btn" data-a="plazo">⌛ Calcular plazo</button>`;
+  const juridico = tipo === "orientacion";
+  pie.innerHTML = `<button class="chip-btn" data-a="oir">▶ Escuchar explicación</button><button class="chip-btn" data-a="copiar">Copiar</button>` +
+    (juridico ? `<button class="chip-btn" data-a="doc">✎ Convertir en documento</button><button class="chip-btn" data-a="plazo">⌛ Calcular plazo</button>` : "");
   $(".folio", nodo).appendChild(pie);
   pie.addEventListener("click", (e) => {
     const a = e.target.dataset.a;
-    if (a === "oir") hablar(texto);
+    if (a === "oir") hablar(guion?.length ? guion : texto, nodo);
     if (a === "copiar") navigator.clipboard?.writeText(texto).then(() => toast("Respuesta copiada"));
     if (a === "doc") desdeConversacion();
     if (a === "plazo") abrir("terminos");
@@ -307,6 +323,7 @@ function limpiarConsulta() {
   hilo.innerHTML = ""; $("#fuentes").innerHTML = '<p class="nota">Las fuentes aparecerán aquí.</p>';
   $("#metricas-turno").innerHTML = ""; $("#exp-num").textContent = "—";
   $("#exp-area").innerHTML = '<span class="vacio">Sin clasificar</span>'; $("#exp-estampa").hidden = true;
+  abrirSesion();
 }
 
 /* =====================================================================
@@ -412,6 +429,7 @@ function dictadoNavegador() {
 }
 
 mic.addEventListener("click", () => {
+  if (estado.cerrada) return toast("Esta conversación se cerró. Recargue la página para empezar de nuevo.");
   if (estado.ocupado) return toast("Espere la respuesta anterior");
   if (grabador?.state === "recording") return pararGrabacion();
   if (estado.sistema && !estado.sistema.stt) return dictadoNavegador();
@@ -419,41 +437,126 @@ mic.addEventListener("click", () => {
   empezarGrabacion();
 });
 
-async function hablar(texto) {
+/* ---------- Voz de Amparo: explica (no lee), con emoción por frase ---------- */
+// Respaldo con la voz del navegador: [ritmo, tono] por emoción
+const PROSODIA_NAV = { alegre: [1.07, 1.15], animada: [1.05, 1.1], calida: [0.97, 1.03], tranquila: [0.94, 0.98], seria: [0.95, 0.9] };
+const limpiarVoz = (t) => String(t || "").replace(/\[\d+\]/g, "").replace(/[*_#>`]/g, "").replace(/\s+([.,;:!?])/g, "$1").trim();
+function dividirFrases(texto) {
+  return limpiarVoz(texto).split(/(?<=[.!?])\s+|\n+/).filter((f) => f.trim().length > 1)
+    .map((f, i) => ({ emocion: /^¡|!$/.test(f.trim()) ? (i ? "animada" : "alegre") : /importante|plazo|vence|cuidado|peligro/i.test(f) ? "seria" : i ? "tranquila" : "calida", texto: f.trim() }));
+}
+function vozNavegador(nombre) {
+  if (!("speechSynthesis" in window)) return null;
+  const voces = speechSynthesis.getVoices();
+  if (nombre) { const v = voces.find((x) => x.name === nombre); if (v) return v; }
+  const es = voces.filter((v) => v.lang.toLowerCase().startsWith("es"));
+  return es.find((v) => /natural|online/i.test(v.name) && /CO|US|MX/.test(v.lang)) || es.find((v) => /natural|online/i.test(v.name))
+    || es.find((v) => v.lang === "es-CO") || es.find((v) => /es-(US|MX|419)/.test(v.lang)) || es[0] || null;
+}
+function marcarFrase(nodo, i) {
+  if (!nodo) return;
+  $$(".nota-voz [data-i]", nodo).forEach((s) => s.classList.toggle("dicha", +s.dataset.i === i));
+  const nv = $(".nota-voz", nodo); if (!nv) return;
+  nv.classList.toggle("sonando", i >= 0);
+  $(".nota-voz__play", nv).textContent = i >= 0 ? "■" : "▶";
+}
+hablar.turno = 0;
+async function hablar(contenido, nodo = null, opciones = {}) {
   callar();
-  const limpio = texto.replace(/\[\d+\]/g, "").replace(/[*_#>`]/g, "");
+  const turno = ++hablar.turno;
+  const segs = (Array.isArray(contenido) ? contenido : dividirFrases(contenido)).filter((s) => limpiarVoz(s.texto));
+  if (!segs.length) return;
+  const vozId = opciones.vozId ?? estado.vozId;
   etapa("tts", "inicio");
   const t0 = performance.now();
-  if (estado.sistema?.tts) {
+  const fin = () => { mic.classList.remove("hablando"); detenerDibujo(); marcarFrase(nodo, -1); };
+  if (!vozId.startsWith("nav:") && estado.sistema?.tts) {
     try {
-      const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ texto: limpio }) });
+      const r = await fetch("/api/tts", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ segmentos: segs, voz: vozId.startsWith("piper:") ? vozId.slice(6) : null, velocidad: estado.velocidad }) });
+      if (turno !== hablar.turno) return;
       if (r.ok) {
+        const dur = (r.headers.get("X-Segmentos") || "").split(",").map(Number).filter((x) => x > 0);
         const url = URL.createObjectURL(await r.blob());
+        if (turno !== hablar.turno) return URL.revokeObjectURL(url);
         reproductor = new Audio(url);
         asegurarAudio();
         const an = audioCtx.createAnalyser(); an.fftSize = 128;
         const src = audioCtx.createMediaElementSource(reproductor); src.connect(an); an.connect(audioCtx.destination);
         etapa("tts", "fin", Math.round(performance.now() - t0));
-        mic.classList.add("hablando"); dibujar(an, "#2F5D50");
-        reproductor.onended = () => { mic.classList.remove("hablando"); detenerDibujo(); URL.revokeObjectURL(url); };
-        return reproductor.play();
+        mic.classList.add("hablando"); dibujar(an, getComputedStyle(document.documentElement).getPropertyValue("--salvia").trim());
+        const yo = reproductor;
+        yo.ontimeupdate = () => { // subtítulos: resalta la frase que está diciendo
+          let t = yo.currentTime * 1000, i = 0;
+          while (i < dur.length - 1 && t > dur[i]) { t -= dur[i]; i++; }
+          marcarFrase(nodo, i);
+        };
+        yo.onended = () => { fin(); URL.revokeObjectURL(url); };
+        return yo.play();
       }
     } catch (_) { /* respaldo abajo */ }
   }
   if (!("speechSynthesis" in window)) return etapa("tts", "fin");
-  const u = new SpeechSynthesisUtterance(limpio);
-  const voces = speechSynthesis.getVoices();
-  u.voice = voces.find((v) => v.lang === "es-CO") || voces.find((v) => v.lang.startsWith("es-US") || v.lang.startsWith("es-MX")) || voces.find((v) => v.lang.startsWith("es")) || null;
-  u.lang = u.voice?.lang || "es-CO"; u.rate = 1.03;
-  u.onstart = () => { etapa("tts", "fin", Math.round(performance.now() - t0)); $('.nodo[data-etapa="tts"] b').textContent = "Voz"; mic.classList.add("hablando"); dibujar(null, "#2F5D50"); };
-  u.onend = () => { mic.classList.remove("hablando"); detenerDibujo(); };
-  speechSynthesis.speak(u);
+  const voz = vozNavegador(vozId.startsWith("nav:") ? vozId.slice(4) : null);
+  segs.forEach((s, i) => {
+    const u = new SpeechSynthesisUtterance(limpiarVoz(s.texto));
+    const [ritmo, tono] = PROSODIA_NAV[s.emocion] || [1, 1];
+    u.voice = voz; u.lang = voz?.lang || "es-CO"; u.rate = ritmo * estado.velocidad; u.pitch = tono;
+    u.onstart = () => {
+      if (turno !== hablar.turno) return;
+      if (i === 0) { etapa("tts", "fin", Math.round(performance.now() - t0)); $('.nodo[data-etapa="tts"] b').textContent = "Voz"; mic.classList.add("hablando"); dibujar(null, "#2F5D50"); }
+      marcarFrase(nodo, i);
+    };
+    if (i === segs.length - 1) u.onend = fin;
+    speechSynthesis.speak(u);
+  });
 }
 function callar() {
+  hablar.turno = (hablar.turno || 0) + 1;
   if (reproductor) { reproductor.pause(); reproductor = null; }
   if ("speechSynthesis" in window) speechSynthesis.cancel();
   mic.classList.remove("hablando");
+  $$(".nota-voz.sonando").forEach((n) => { n.classList.remove("sonando"); $(".nota-voz__play", n).textContent = "▶"; $$(".dicha", n).forEach((x) => x.classList.remove("dicha")); });
   if (grabador?.state !== "recording") detenerDibujo();
+}
+
+/* ---------- Nota de voz (lo que Amparo dice) y tipos de respuesta ---------- */
+const EMOCION_TXT = { alegre: "alegre", animada: "animada", calida: "cálida", tranquila: "tranquila", seria: "seria" };
+function pintarNotaVoz(nodo, guion) {
+  $(".nota-voz", nodo)?.remove();
+  const d = document.createElement("div");
+  d.className = "nota-voz";
+  d.innerHTML = `<button class="nota-voz__play" type="button" aria-label="Escuchar explicación">▶</button>
+    <div><small>Amparo se lo explica en voz</small><p>${guion.map((s, i) => `<span data-i="${i}" data-e="${esc(s.emocion)}" title="Tono ${EMOCION_TXT[s.emocion] || s.emocion}">${esc(s.texto)}</span>`).join(" ")}</p></div>`;
+  $(".folio__cuerpo", nodo).after(d);
+  $(".nota-voz__play", d).addEventListener("click", () => (d.classList.contains("sonando") ? callar() : hablar(guion, nodo)));
+}
+const TIPOS = {
+  saludo: "sobre mí", capacidades: "sobre mí", quien: "sobre mí", naturaleza: "sobre mí", creador: "sobre mí", costo: "sobre mí",
+  privacidad: "sobre mí", fuentes: "sobre mí", voz: "sobre mí", gracias: "con gusto", despedida: "hasta pronto",
+  fuera_tema: "fuera de tema", aviso: "aviso de respeto", cierre: "cierre de la sesión",
+};
+function marcarTipo(nodo, tipo) {
+  if (!TIPOS[tipo]) return;
+  const cab = $(".folio__cab span", nodo);
+  if (cab) cab.textContent = `Amparo · ${TIPOS[tipo]}`;
+  $(".folio", nodo).classList.add(tipo === "aviso" || tipo === "cierre" ? "folio--aviso" : "folio--charla");
+}
+
+/* ---------- Cierre de la sesión (lenguaje ofensivo) ---------- */
+function cerrarSesion(motivo, dura = true) {
+  estado.cerrada = true; if (dura) estado.cerradaDura = true;
+  $("#sesion-cerrada").hidden = false;
+  $("#sesion-cerrada-motivo").textContent = motivo || "Recargue la página para empezar de nuevo.";
+  $("#redactor").classList.add("bloqueado");
+  entrada.disabled = true; $("#enviar").disabled = true; mic.disabled = true;
+  entrada.placeholder = "Conversación cerrada · recargue la página para empezar de nuevo";
+}
+function abrirSesion() {
+  if (estado.cerradaDura) return;
+  estado.cerrada = false; $("#sesion-cerrada").hidden = true; $("#redactor").classList.remove("bloqueado");
+  entrada.disabled = false; $("#enviar").disabled = false; mic.disabled = false;
+  entrada.placeholder = "Escriba su situación con sus palabras… (Enter para enviar)";
 }
 
 /* =====================================================================
@@ -573,6 +676,7 @@ function pintarEvaluacion(ev) {
   $("#diales").innerHTML = dial(s.exactitud_area, "Área correcta", "clasificación") + dial(s.hit_3, "Hit@3", "fuente en top 3") +
     dial(s.hit_5, "Hit@5", "fuente en top 5") + dial(s.mrr, "MRR", "rango recíproco") + dial(s.emergencias, "Emergencias", "detección") +
     (s.limites != null ? dial(s.limites, "Límites", "pedidos fuera de alcance") : "") +
+    (s.personalidad != null ? dial(s.personalidad, "Personalidad", `${s.casos_personalidad} casos: sobre mí, ofensas`) : "") +
     (s.cobertura_respuesta != null ? dial(s.cobertura_respuesta, "Cobertura", "claves en respuesta") : "") +
     `<div class="dial"><svg viewBox="0 0 96 96"><text x="48" y="56" text-anchor="middle" font-family="JetBrains Mono" font-size="20" font-weight="600" fill="currentColor">${s.latencia_ms}</text></svg><b>ms / caso</b><small>${s.casos} casos</small></div>`;
   $("#tabla-eval").innerHTML = `<table><thead><tr><th>#</th><th>Pregunta</th><th>Área esperada</th><th>Obtenida</th><th>Rango fuente</th><th>ms</th></tr></thead><tbody>${
@@ -588,7 +692,8 @@ alAbrir.laboratorio = async () => {
     ["Embedding", "EmbeddingGemma", "768 dim · Ollama"],
     ["Recuperación", "PostgreSQL + pgvector", "HNSW coseno + tsvector · RRF"],
     ["Razonamiento", s?.llm?.modelo || "LLM", s?.llm?.proveedor === "openai" ? "API compatible OpenAI" : "Ollama · CPU"],
-    ["Salida", "Piper TTS", "es_MX · ONNX · CPU"],
+    ["Guion hablado", "Explicación con emoción", "alegre · cálida · tranquila · seria"],
+    ["Salida", "Piper TTS", "varias voces · prosodia por frase · CPU"],
   ].map(([a, b, c]) => `<div class="arq"><small>${a}</small><b>${esc(b)}</b><p>${esc(c)}</p></div>`).join("");
   try {
     const [m, ev, docs] = await Promise.all([api("/api/metricas"), api("/api/evaluacion"), api("/api/documentos-fuente")]);
@@ -686,33 +791,12 @@ function pintarCaso(c) {
   const est = c?.estado || "abierto";
   $("#exp-estado").dataset.estado = est;
   $("#exp-estado").innerHTML = `<span>${ESTADOS[est]}</span>${c?.citas?.filter((x) => x.estado !== "cancelada").map((x) => `<small>📅 ${new Date(x.fecha + "T12:00").toLocaleDateString("es-CO", { day: "numeric", month: "short" })} · ${x.hora} · ${esc(x.entidad)}</small>`).join("") || ""}`;
-  const p = estado.consultantePendiente;
-  if (!c?.consultante_id && p) c = { ...(c || {}), consultante_id: p.id, nombre: p.nombre, documento: p.documento, municipio: p.municipio, zona: p.zona, telefono: p.telefono };
-  $("#exp-consultante").innerHTML = c?.consultante_id
-    ? `<b>${esc(c.nombre)}</b><span class="nota">${esc([c.documento, c.municipio, c.zona].filter(Boolean).join(" · "))}</span><button class="chip-btn" id="btn-consultante" type="button">Editar</button>`
-    : `<button class="chip-btn" id="btn-consultante" type="button">＋ Registrar consultante</button>`;
-  $("#btn-consultante").addEventListener("click", () => abrirConsultante());
-}
-
-function abrirConsultante(alGuardar) {
-  const dlg = $("#dlg-consultante"), f = $("#form-consultante");
-  f.reset();
-  const c = estado.caso?.consultante_id ? estado.caso : estado.consultantePendiente;
-  if (c) ["nombre", "documento", "telefono", "correo", "municipio", "zona"].forEach((k) => { if (c[k]) f.elements[k].value = c[k]; });
-  f.onsubmit = async (e) => {
-    if (e.submitter?.value !== "ok") return;
-    e.preventDefault();
-    if (!f.reportValidity()) return;
-    const datos = Object.fromEntries(new FormData(f)); datos.consentimiento = f.elements.consentimiento.checked;
-    datos.conversacion_id = estado.conversacion;
-    try {
-      const r = await api("/api/consultantes", { method: "POST", body: JSON.stringify(datos) });
-      dlg.close(); toast(`Consultante ${r.nombre} registrado`);
-      if (!estado.conversacion) estado.consultantePendiente = r;
-      await refrescarCaso(); alGuardar?.(r);
-    } catch (err) { toast("No se pudo guardar: " + err.message); }
-  };
-  dlg.showModal();
+  const alias = c?.alias || estado.alias;
+  $("#exp-consultante").innerHTML = (c?.consultante_id
+    ? `<b>${esc(c.nombre)}</b><span class="nota">${esc([c.documento ? "C.C. " + c.documento : "", c.telefono].filter(Boolean).join(" · "))} · datos dados al agendar la cita</span>`
+    : `<b>${esc(alias || "Sin nombre")}</b><span class="nota">${alias ? "Así le llama Amparo" : "Conversación anónima"} · los datos personales solo se piden al agendar una cita</span>`) +
+    `<button class="chip-btn" id="btn-nombre" type="button">${alias ? "Cambiar nombre" : "＋ Decir mi nombre"}</button>`;
+  $("#btn-nombre").addEventListener("click", () => abrirNombre());
 }
 
 function marcarLimite(nodo, l) {
@@ -753,12 +837,13 @@ async function abrirCita(entidades) {
     <div class="paso"><span class="paso__n">2</span><b>¿Cuándo?</b> <small class="nota">Solo días hábiles; se saltan los festivos.</small></div>
     <div class="dias" id="cita-dias">${dias.map((d) => `<button type="button" class="dia-btn ${Terminos.iso(d) === sel.fecha ? "activa" : ""}" data-f="${Terminos.iso(d)}"><small>${d.toLocaleDateString("es-CO", { weekday: "short" })}</small><b>${d.getDate()}</b><small>${d.toLocaleDateString("es-CO", { month: "short" })}</small></button>`).join("")}</div>
     <div class="horas" id="cita-horas"></div>
-    <div class="paso"><span class="paso__n">3</span><b>Datos de la cita</b></div>
+    <div class="paso"><span class="paso__n">3</span><b>Sus datos de contacto</b> <small class="nota">Ahora sí los necesitamos, para que el consultorio le pueda llamar.</small></div>
     <form id="form-cita" class="rejilla-2">
       <label class="campo"><span>Modalidad</span><select name="modalidad"><option value="presencial">Presencial</option><option value="telefonica">Telefónica</option><option value="virtual">Virtual</option></select></label>
-      <label class="campo"><span>Nombre completo *</span><input name="nombre" required value="${esc(c?.nombre || "")}"></label>
+      <label class="campo"><span>Nombre completo *</span><input name="nombre" required autocomplete="name" value="${esc(c?.nombre || "")}" placeholder="${esc(estado.alias ? estado.alias + " …" : "Nombres y apellidos")}"></label>
       <label class="campo"><span>Documento</span><input name="documento" value="${esc(c?.documento || "")}"></label>
-      <label class="campo"><span>Teléfono *</span><input name="telefono" required inputmode="tel" value="${esc(c?.telefono || "")}"></label>
+      <label class="campo"><span>Teléfono *</span><input name="telefono" required inputmode="tel" autocomplete="tel" value="${esc(c?.telefono || "")}"></label>
+      <label class="campo"><span>Correo (opcional)</span><input name="correo" type="email" autocomplete="email" value="${esc(c?.correo || "")}"></label>
       <label class="campo campo--ancho"><span>Motivo de la consulta</span><textarea name="motivo" rows="3">${esc(resumen)}</textarea></label>
       <label class="consentimiento campo--ancho"><input type="checkbox" name="consentimiento" required ${c?.consultante_id ? "checked" : ""}> Autorizo el tratamiento de mis datos para gestionar la cita (Ley 1581 de 2012).</label>
     </form>
@@ -781,7 +866,7 @@ async function abrirCita(entidades) {
     try {
       const r = await api("/api/citas", { method: "POST", body: JSON.stringify({
         entidad_id: sel.entidad, fecha: sel.fecha, hora: sel.hora, modalidad: d.modalidad, motivo: d.motivo, conversacion_id: estado.conversacion,
-        consultante: { nombre: d.nombre, documento: d.documento, telefono: d.telefono, municipio: c?.municipio || "Mocoa", zona: c?.zona || null, correo: c?.correo || null, consentimiento: f.elements.consentimiento.checked },
+        consultante: { nombre: d.nombre, documento: d.documento, telefono: d.telefono, municipio: c?.municipio || "Mocoa", zona: c?.zona || null, correo: d.correo || null, consentimiento: f.elements.consentimiento.checked },
       }) });
       constancia(r, d);
       refrescarCaso();
@@ -819,18 +904,158 @@ async function cargarConversacion(id) {
     if (m.rol === "usuario") { agregarUsuario(m.contenido, m.canal); estado.ultimoUsuario.push(m.contenido); }
     else {
       const n = nuevoFolio(); const c = $(".folio__cuerpo", n);
-      c.innerHTML = md(m.contenido); enlazarCitas(c); pieFolio(n, m.contenido);
+      c.innerHTML = md(m.contenido); enlazarCitas(c);
+      if (m.tipo && m.tipo !== "orientacion") marcarTipo(n, m.tipo);
+      if (m.guion?.length) pintarNotaVoz(n, m.guion);
+      pieFolio(n, m.contenido, m.guion, m.tipo || "orientacion");
       if (m.expediente?.remision) pintarRemision(n, m.expediente.remision);
       if (m.expediente) pintarExpediente(m.expediente);
       if (m.fuentes) pintarFuentes(m.fuentes);
       if (m.metricas) pintarMetricas(m.metricas);
     }
   }
-  refrescarCaso();
+  await refrescarCaso();
+  if (estado.caso?.bloqueada) cerrarSesion("Esta charla se cerró por lenguaje ofensivo. Puede leerla, pero no continuarla.", false);
 }
+
+
+/* =====================================================================
+   Identificación en dos pasos · paso 1: solo un nombre o apodo
+   ===================================================================== */
+function abrirNombre(inicial = false) {
+  const dlg = $("#dlg-nombre"), f = $("#form-nombre");
+  f.elements.alias.value = estado.alias;
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    const v = e.submitter?.value === "ok" ? f.elements.alias.value.trim().slice(0, 40) : "";
+    fijarAlias(v); dlg.close();
+    if (inicial) saludar();
+    else toast(v ? `¡Listo! Le llamaré ${v}` : "Seguimos sin nombre, no hay problema");
+  };
+  dlg.oncancel = () => { if (inicial) fijarAlias(""); };
+  dlg.showModal();
+  setTimeout(() => f.elements.alias.focus(), 60);
+}
+function fijarAlias(v) {
+  estado.alias = v; guardarSesion("amparo-alias", v); guardarSesion("amparo-preguntado", "1");
+  pintarSaludo(); pintarCaso(estado.caso);
+}
+function pintarSaludo() {
+  const el = $("#saludo-amparo"); if (!el) return;
+  el.hidden = false;
+  el.innerHTML = estado.alias ? `¡Hola, <b>${esc(estado.alias)}</b>! Qué gusto tenerle aquí.` : "¡Hola! Qué gusto tenerle aquí.";
+}
+function saludar() {
+  if (!estado.vozAuto) return;
+  const n = estado.alias ? `, ${estado.alias}` : "";
+  hablar([{ emocion: "alegre", texto: `¡Hola${n}! Qué gusto tenerle aquí.` },
+          { emocion: "calida", texto: "Soy Amparo. Cuénteme con calma qué le pasó, por escrito o hablando con el micrófono." }]);
+}
+$$("#preguntas-amparo button").forEach((b) => b.addEventListener("click", () => enviar(b.textContent)));
+
+/* =====================================================================
+   Selector de voces
+   ===================================================================== */
+const muestraVoz = () => [
+  { emocion: "alegre", texto: `¡Hola${estado.alias ? ", " + estado.alias : ""}! Así sonaría mi voz.` },
+  { emocion: "calida", texto: "Le explicaré sus derechos con calma y con palabras sencillas." },
+  { emocion: "seria", texto: "Y cuando algo sea importante, se lo diré con claridad." },
+];
+async function vocesNavegador() {
+  if (!("speechSynthesis" in window)) return [];
+  let v = speechSynthesis.getVoices();
+  if (!v.length) { await new Promise((r) => setTimeout(r, 400)); v = speechSynthesis.getVoices(); }
+  return v.filter((x) => x.lang.toLowerCase().startsWith("es"))
+    .sort((a, b) => /natural|online/i.test(b.name) - /natural|online/i.test(a.name) || (b.lang === "es-CO") - (a.lang === "es-CO"));
+}
+async function abrirVoces() {
+  const dlg = $("#dlg-voces");
+  let info = { disponible: false, instaladas: [], catalogo: [] };
+  try { info = await api("/api/voces"); } catch (_) {}
+  const nav = await vocesNavegador();
+  const actual = estado.vozId || (info.instaladas[0] ? "piper:" + info.instaladas[0].id : nav[0] ? "nav:" + nav[0].name : "");
+  const tarjeta = (id, nombre, sub, desc, etiqueta) => `
+    <div class="voz ${id === actual ? "activa" : ""}" data-id="${esc(id)}">
+      <button class="voz__elegir" type="button"><span class="voz__avatar">${esc(nombre[0] || "A")}</span>
+        <span class="voz__txt"><b>${esc(nombre)}</b><small>${esc(sub)}</small><em>${esc(desc)}</em></span>
+        <i class="voz__etiqueta">${etiqueta}</i></button>
+      <button class="chip-btn voz__probar" type="button">▶ Muestra</button>
+    </div>`;
+  const corto = (n) => n.replace(/^(Microsoft|Google)\s+/, "").replace(/\s+Online.*$/, "").replace(/\s*[-–(].*$/, "");
+  $("#lista-voces").innerHTML =
+    (info.instaladas.length
+      ? `<h4>Voces locales · Piper <small>funcionan sin internet</small></h4><div class="voces__grid">${info.instaladas.map((v) =>
+          tarjeta("piper:" + v.id, v.nombre, [v.genero, v.acento].filter(Boolean).join(" · "), v.desc || v.calidad, "local")).join("")}</div>`
+      : `<p class="nota">Piper aún no tiene voces instaladas en el servidor. Mientras tanto se usan las voces del navegador.</p>`) +
+    (nav.length
+      ? `<h4>Voces del navegador <small>en Edge las «Natural» suenan muy humanas</small></h4><div class="voces__grid">${nav.slice(0, 12).map((v) =>
+          tarjeta("nav:" + v.name, corto(v.name), v.lang, /natural|online/i.test(v.name) ? "Neuronal, muy natural (usa internet)" : v.localService ? "Instalada en este equipo" : "En línea",
+            /natural|online/i.test(v.name) ? "natural" : "navegador")).join("")}</div>`
+      : "");
+  $("#voces-faltantes").innerHTML = (info.catalogo || []).filter((c) => !c.instalada).map((c) =>
+    `<div class="faltante"><span><b>${esc(c.nombre)}</b> · ${esc(c.genero)} · ${esc(c.acento)} · ${c.mb} MB</span><code>python -m scripts.descargar_voz ${esc(c.id)}</code></div>`).join("")
+    || '<p class="nota">¡Ya tiene todas las voces del catálogo!</p>';
+  $$("#lista-voces .voz").forEach((el) => {
+    $(".voz__elegir", el).onclick = () => {
+      estado.vozId = el.dataset.id; guardar("amparo-voz-id", estado.vozId);
+      $$("#lista-voces .voz").forEach((x) => x.classList.toggle("activa", x === el));
+      hablar(muestraVoz().slice(0, 1), null, { vozId: el.dataset.id });
+      toast(`Voz elegida: ${$("b", el).textContent}`);
+    };
+    $(".voz__probar", el).onclick = () => hablar(muestraVoz(), null, { vozId: el.dataset.id });
+  });
+  const vel = $("#vel-voz"); vel.value = estado.velocidad; $("#vel-valor").textContent = `${(+vel.value).toFixed(2)}×`;
+  vel.oninput = () => { estado.velocidad = +vel.value; guardar("amparo-velocidad", vel.value); $("#vel-valor").textContent = `${(+vel.value).toFixed(2)}×`; };
+  vel.onchange = () => hablar(muestraVoz().slice(1, 2));
+  const chk = $("#voz-auto-chk"); chk.checked = estado.vozAuto;
+  chk.onchange = () => { estado.vozAuto = chk.checked; guardar("amparo-voz", chk.checked ? "1" : "0"); pintarVoz(); if (!chk.checked) callar(); };
+  $("[data-cerrar]", dlg).onclick = () => { callar(); dlg.close(); };
+  if (!dlg.open) dlg.showModal();
+}
+$("#btn-voces").addEventListener("click", abrirVoces);
+
+/* =====================================================================
+   Historial de charlas
+   ===================================================================== */
+const normalizarTxt = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+let charlas = [];
+async function abrirHistorial() {
+  const dlg = $("#dlg-historial");
+  if (!dlg.open) dlg.showModal();
+  $("#lista-charlas").innerHTML = '<p class="nota">Cargando…</p>';
+  try { charlas = await api("/api/conversaciones"); } catch (_) { $("#lista-charlas").innerHTML = '<p class="nota">No pude cargar el historial.</p>'; return; }
+  pintarHistorial();
+}
+function pintarHistorial() {
+  const q = normalizarTxt($("#buscar-charla").value);
+  const lista = charlas.filter((c) => !q || normalizarTxt([c.alias, c.consultante, c.titulo, c.area].join(" ")).includes(q));
+  const hoy = new Date().toDateString(), ayer = new Date(Date.now() - 864e5).toDateString();
+  let dia = "", html = "";
+  for (const c of lista) {
+    const f = new Date(c.actualizada);
+    const d = f.toDateString() === hoy ? "Hoy" : f.toDateString() === ayer ? "Ayer" : f.toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" });
+    if (d !== dia) { html += `<h5 class="charlas__dia">${esc(d)}</h5>`; dia = d; }
+    html += `<button class="charla ${c.id === estado.conversacion ? "actual" : ""} ${c.bloqueada ? "cerrada" : ""}" data-id="${c.id}" style="--c:${c.color || "var(--tinta-3)"}">
+      <span class="charla__sim">${esc(c.simbolo || "✦")}</span>
+      <span class="charla__txt"><b>${esc(c.titulo || "Charla")}</b>
+        <small>${esc(c.alias || c.consultante || "Anónimo")} · ${f.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })} · ${c.mensajes} mensajes${c.area ? " · " + esc(c.area) : ""}</small></span>
+      <i class="charla__tag">${c.bloqueada ? "cerrada" : esc(ESTADOS[c.estado] || c.estado)}</i></button>`;
+  }
+  $("#lista-charlas").innerHTML = html || '<p class="nota">Aún no hay charlas guardadas.</p>';
+  $$("#lista-charlas .charla").forEach((b) => b.addEventListener("click", () => { $("#dlg-historial").close(); cargarConversacion(b.dataset.id); }));
+}
+$("#btn-historial").addEventListener("click", abrirHistorial);
+$("#buscar-charla").addEventListener("input", pintarHistorial);
+$("[data-cerrar]", $("#dlg-historial")).addEventListener("click", () => $("#dlg-historial").close());
+$("#dlg-historial").addEventListener("click", (e) => { if (e.target.id === "dlg-historial") e.target.close(); });
+$("#btn-nueva-charla").addEventListener("click", () => {
+  if (estado.cerradaDura) return toast("Esta sesión se cerró. Recargue la página para empezar de nuevo.");
+  $("#dlg-historial").close(); limpiarConsulta(); abrir("consulta");
+});
 
 /* ---------- Arranque ---------- */
 pintarCaso(null);
+if (leerSesion("amparo-preguntado")) pintarSaludo(); else abrirNombre(true);
 cargarEstado();
 setInterval(cargarEstado, 30000);
 if ("speechSynthesis" in window) speechSynthesis.getVoices();

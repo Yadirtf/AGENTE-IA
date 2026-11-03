@@ -25,8 +25,14 @@ Todo corre **localmente en CPU**. Está pensado para un PC de **16 GB de RAM sin
 | **Directorio** | Entidades gratuitas de Mocoa/Putumayo y nacionales, filtradas por área (están guardadas en PostgreSQL). |
 | **Laboratorio** | Muestra la arquitectura, la latencia promedio de cada etapa, las consultas por área y una **evaluación con 28 casos de prueba** (exactitud del área, Hit@3, Hit@5, MRR, detección de emergencias, detección de límites y cobertura de la respuesta). |
 | **Casos** | Tablero por estado (abierto → orientado → remitido → en trámite → cerrado). Las carpetas se arrastran entre columnas y cada cambio queda en `historial_estados`. Incluye la agenda de citas con el consultorio. |
-| **Consultantes y citas** | Ficha del consultante con autorización de datos (Ley 1581 de 2012). Cada respuesta termina con una **remisión al consultorio jurídico** y un botón para agendar cita: se elige la entidad, uno de los próximos días hábiles (sin festivos) y una hora libre, y se genera una constancia imprimible. El caso pasa a «Remitido». |
+| **Consultantes y citas** | Los datos del consultante se toman al agendar la cita, con autorización de datos (Ley 1581 de 2012). Cada respuesta termina con una **remisión al consultorio jurídico** y un botón para agendar cita: se elige la entidad, uno de los próximos días hábiles (sin festivos) y una hora libre, y se genera una constancia imprimible. El caso pasa a «Remitido». |
 | **Límites del agente** | Detecta pedidos fuera de alcance (representarle, redactar demandas, predecir fallos, evadir la ley), los marca en la respuesta y remite al consultorio. Se evalúa con casos de prueba propios. |
+| **Personalidad propia** | Amparo es cálida y alegre: pregunta al inicio *cómo le gusta que le llamen* (solo un nombre o apodo) y saluda por ese nombre. Responde al instante, sin LLM, las preguntas sobre ella misma (*¿en qué me puedes ayudar?, ¿eres abogada?, ¿es gratis?, ¿guardas mis datos?, ¿de dónde sacas la información?*), los saludos y las despedidas. Si le preguntan algo que no es jurídico, lo dice con amabilidad y vuelve al tema. |
+| **Explica en voz, no lee** | La voz no lee el texto de la pantalla. Después de cada respuesta el LLM escribe un **guion hablado** de 3 a 5 frases cortas, como lo diría una persona, con una emoción por frase (*alegre, animada, cálida, tranquila, seria*). Piper ajusta el ritmo, la variación y el tono de cada frase, y la interfaz muestra la nota de voz con subtítulos que se resaltan mientras habla. |
+| **Elegir la voz** | El botón **🎙 Voz** muestra las voces de Piper instaladas (México, Argentina y España, femeninas y masculinas) y las del navegador (en Edge, las voces «Natural» suenan muy humanas). Cada una tiene muestra, y se puede ajustar la velocidad. La elección queda guardada en el navegador. |
+| **Respeto y cierre de sesión** | Si insultan a Amparo, responde con amabilidad y pide respeto. Si se repite, cierra la charla: el chat queda bloqueado hasta recargar la página y la conversación queda en el historial como «cerrada». Si la persona cuenta que *otra persona* la insulta («mi pareja me dice inútil»), eso se trata como parte de su caso y no se corta. |
+| **Historial de charlas** | El botón **🗂** abre todas las charlas guardadas, agrupadas por día, con buscador por nombre o tema. Se pueden reabrir; las cerradas por ofensas se ven en modo lectura. |
+| **Identificación en dos pasos** | Al inicio solo se pide un nombre o apodo. La cédula, el teléfono, el correo y la autorización de datos (Ley 1581 de 2012) se piden únicamente al agendar la cita. |
 | **Modo sencillo / técnico** y **modo nocturno** | Cambian el nivel del lenguaje jurídico y la paleta de colores. |
 
 ---
@@ -68,8 +74,10 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env          # macOS/Linux: cp .env.example .env
 
-# 4. Voz en español para Piper (~110 MB)
-python -m scripts.descargar_voz
+# 4. Voces en español para Piper
+python -m scripts.descargar_voz            # solo la voz por defecto (~110 MB)
+python -m scripts.descargar_voz --todas    # las 6 voces del catálogo (~460 MB), para elegir en «🎙 Voz»
+python -m scripts.descargar_voz --lista    # ver el catálogo
 
 # 5. Verificar que todo está listo (Ollama, modelos, PostgreSQL, voz)
 python -m scripts.diagnostico
@@ -113,7 +121,8 @@ app/
   llm.py           Ollama / API compatible OpenAI + EmbeddingGemma
   rag.py           Búsqueda híbrida pgvector + tsvector con Reciprocal Rank Fusion
   orientacion.py   Emergencias, urgencia, clasificación de área y prompt
-  voz.py           faster-whisper (STT) y Piper (TTS)
+  personalidad.py  Preguntas sobre Amparo, ofensas, temas no jurídicos y guion hablado con emoción
+  voz.py           faster-whisper (STT) y Piper (TTS) con varias voces y prosodia por frase
   evaluacion.py    Métricas con casos de prueba
 sql/
   schema.sql       Tablas: catálogos, conocimiento vectorial, conversaciones y trazabilidad
@@ -121,6 +130,7 @@ sql/
 conocimiento/      17 documentos: Constitución (artículos clave), normas básicas, modelos de
                    petición y tutela, guía de consultorios jurídicos y preguntas frecuentes
 eval/casos.json    28 casos de prueba con área, fuente y límite esperados
+eval/personalidad.json  26 casos: preguntas sobre Amparo, temas no jurídicos y ofensas (y relatos que NO son ofensas)
 scripts/           ingestar.py · evaluar.py · descargar_voz.py
 web/               Interfaz: index.html · estilos.css · app.js · terminos.js · plantillas.js
 ```
@@ -130,7 +140,8 @@ web/               Interfaz: index.html · estilos.css · app.js · terminos.js 
 - **Conocimiento (vectorial):** `documentos` → `fragmentos` (`embedding vector(768)` con índice HNSW, más `tsv` generado en español).
 - **Dominio:** `areas` (con embedding para clasificar), `rutas`, `entidades`.
 - **Transaccional:** `consultantes` (con consentimiento de datos), `conversaciones` = **casos** (tipo de consulta, urgencia, **estado**, consultante), `historial_estados`, `citas_consultorio` (sin choques de horario por índice único), `documentos_generados`, y la vista `casos` para informes.
-- **Trazabilidad:** `mensajes` (fuentes, expediente, remisión y métricas de latencia en JSONB) y `evaluaciones`.
+- **Trazabilidad:** `mensajes` (fuentes, expediente, remisión, **guion hablado**, tipo de respuesta y métricas de latencia en JSONB) y `evaluaciones`.
+- **Sesión:** `conversaciones.alias` (nombre o apodo), `advertencias`, `bloqueada` y `motivo_cierre`.
 
 | Requisito del punto 15 | Dónde está |
 |---|---|
@@ -145,10 +156,12 @@ web/               Interfaz: index.html · estilos.css · app.js · terminos.js 
 ### Cómo responde
 
 1. **Seguridad.** Unas reglas detectan emergencias antes de cualquier llamada al modelo.
+1. **Personalidad.** Si no hay emergencia, se revisa si es una ofensa (aviso o cierre), una pregunta sobre Amparo, un saludo o un tema no jurídico. Esas respuestas son fijas e instantáneas, y no abren expediente.
 2. **Embedding.** EmbeddingGemma vectoriza la pregunta con el prefijo de tarea `task: search result | query:`. Si es una pregunta de seguimiento corta, se combina con la anterior.
 3. **Recuperación híbrida.** Se toman los 30 mejores por coseno en pgvector y los 30 mejores por `ts_rank` en español, y se fusionan con RRF (k=60).
 4. **Expediente.** El área se calcula por similitud con los embeddings de cada área más los votos de los fragmentos recuperados. Luego se asignan urgencia, ruta y entidades.
 5. **Generación.** El prompt obliga a usar solo las fuentes, citar `[n]`, no inventar artículos y seguir un formato fijo (*En pocas palabras · Lo que dice la norma · Qué puede hacer · A dónde acudir*).
+6. **Guion hablado.** Una segunda llamada corta al LLM (máx. 180 tokens) convierte la respuesta en lo que Amparo dirá en voz, con una emoción por frase. Si el LLM falla, se arma por reglas. Con `VOZ_GUION=reglas` en `.env` se omite esa llamada (más rápido en PCs lentos).
 6. **Remisión.** Al final de cada respuesta el sistema añade (sin depender del LLM) el recordatorio de que Amparo no reemplaza a un abogado y la opción de agendar cita con el consultorio jurídico.
 7. **Trazabilidad.** Todo se guarda en PostgreSQL con sus tiempos, y el caso pasa de «abierto» a «orientado».
 
@@ -156,14 +169,16 @@ web/               Interfaz: index.html · estilos.css · app.js · terminos.js 
 
 ## Guion sugerido para la presentación (6 min)
 
-1. **Inicio.** Muestre la portada y las fichas de ejemplo. Señale los indicadores de estado (LLM, embeddings, pgvector, Whisper, Piper).
+1. **Inicio.** Al abrir, Amparo pregunta *¿cómo le gusta que le llame?*; escriba un nombre y escuche el saludo. Muestre la portada y las fichas de ejemplo. Señale los indicadores de estado (LLM, embeddings, pgvector, Whisper, Piper).
 2. **Voz.** Toque el sello y diga *"La EPS no me quiere entregar un medicamento que me ordenó el médico"*. Muestre cómo se iluminan las etapas de la tubería, el sello de urgencia en el expediente, la ruta de acción y las citas enlazadas a las fuentes con su similitud.
-3. **Seguimiento.** Pregunte *"¿y si no me responden?"* para mostrar la memoria conversacional.
+3. **Seguimiento.** Pregunte *"¿y si no me responden?"* para mostrar la memoria conversacional. Señale que la voz *explica* (nota de voz con subtítulos) en lugar de leer todo.
+3. **Personalidad.** Pregunte *"¿en qué me puedes ayudar?"* y *"¿eres abogada?"*. Abra **🎙 Voz**, pruebe dos voces y cambie la velocidad.
 4. **Documento.** Pulse **Convertir en documento**. Se sugiere la tutela; luego pulse **Redactar hechos con IA** e **Imprimir**.
 5. **Términos.** Calcule los 15 días hábiles de un derecho de petición y muestre que el calendario salta los festivos.
 6. **Seguridad.** Escriba *"mi pareja me pega"* y muestre la franja de emergencia.
 7. **Límites y remisión.** Pregunte *"¿usted me puede representar en la audiencia?"*: aparece el aviso de límite. Pulse **Agendar cita con el consultorio jurídico**, elija día y hora y muestre la constancia. En **Casos**, el expediente ya está en «Remitido»; arrástrelo a «En trámite».
-8. **Laboratorio.** Ejecute la evaluación y explique Hit@k, MRR y la exactitud por área.
+8. **Respeto.** Escriba *"eres una inútil"* (aviso amable) y luego *"bot estúpido"* (cierre de la sesión). Recargue la página y abra el **🗂 historial**: la charla aparece como «cerrada».
+8. **Laboratorio.** Ejecute la evaluación y explique Hit@k, MRR, la exactitud por área y el dial de **Personalidad**.
 
 ---
 

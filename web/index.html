@@ -37,7 +37,9 @@
     <div class="interruptor" role="group" aria-label="Nivel de lenguaje">
       <button data-modo="sencillo" class="activo">Sencillo</button><button data-modo="tecnico">Técnico</button>
     </div>
-    <button class="icono-btn" id="btn-voz-auto" title="Leer respuestas en voz alta" aria-pressed="true">🔊</button>
+    <button class="icono-btn" id="btn-historial" title="Historial de charlas" aria-label="Historial de charlas">🗂</button>
+    <button class="voz-btn" id="btn-voces" title="Elegir la voz de Amparo"><span aria-hidden="true">🎙</span> Voz</button>
+    <button class="icono-btn" id="btn-voz-auto" title="Explicar las respuestas en voz alta" aria-pressed="true">🔊</button>
     <button class="icono-btn" id="btn-tema" title="Modo nocturno">☾</button>
   </div>
 </header>
@@ -63,8 +65,8 @@
         <div id="exp-estampa" class="estampa" hidden></div>
       </div>
       <div class="bloque consultante-bloque">
-        <h3>Consultante · estado</h3>
-        <div id="exp-consultante" class="consultante-mini"><button class="chip-btn" id="btn-consultante" type="button">＋ Registrar consultante</button></div>
+        <h3>Con quién hablo · estado</h3>
+        <div id="exp-consultante" class="consultante-mini"></div>
         <div class="estado-caso" id="exp-estado" data-estado="abierto"><span>abierto</span></div>
       </div>
       <div class="bloque">
@@ -93,9 +95,17 @@
       <div class="hilo" id="hilo">
         <div class="bienvenida" id="bienvenida">
           <p class="sobretitulo">Consulta gratuita · sin abogado · por texto o voz</p>
+          <p class="saludo-amparo" id="saludo-amparo" hidden></p>
           <h2>Cuéntenos <em>qué le pasó.</em></h2>
           <p class="entrada">Amparo le explica sus derechos según la ley colombiana, le dice <b>qué hacer</b>, <b>en qué plazo</b> y <b>a dónde acudir</b>, citando siempre la norma de donde sale cada respuesta.</p>
           <div class="fichas" id="fichas"></div>
+          <div class="preguntas-amparo" id="preguntas-amparo">
+            <span>También puede preguntarme:</span>
+            <button type="button" class="chip-btn">¿En qué me puedes ayudar?</button>
+            <button type="button" class="chip-btn">¿Eres abogada?</button>
+            <button type="button" class="chip-btn">¿Es gratis?</button>
+            <button type="button" class="chip-btn">¿Guardas mis datos?</button>
+          </div>
           <p class="aviso">Amparo orienta; no reemplaza la asesoría de un abogado. Para su caso concreto acuda a un consultorio jurídico o a la Personería.</p>
         </div>
       </div>
@@ -106,7 +116,14 @@
         <div class="nodo" data-etapa="embedding"><b>Gemma</b><small>embedding</small></div>
         <div class="nodo" data-etapa="pgvector"><b>pgvector</b><small>búsqueda</small></div>
         <div class="nodo" data-etapa="llm"><b>LLM</b><small>razona</small></div>
+        <div class="nodo" data-etapa="guion"><b>Guion</b><small>emoción</small></div>
         <div class="nodo" data-etapa="tts"><b>Piper</b><small>TTS</small></div>
+      </div>
+
+      <div class="sesion-cerrada" id="sesion-cerrada" hidden role="status">
+        <div class="sesion-cerrada__sello" aria-hidden="true">CERRADA</div>
+        <div><b>Esta conversación se cerró.</b><p id="sesion-cerrada-motivo">Recargue la página para empezar de nuevo.</p></div>
+        <button class="btn btn--tinta" type="button" onclick="location.reload()">↻ Empezar de nuevo</button>
       </div>
 
       <form class="redactor" id="redactor" autocomplete="off">
@@ -234,22 +251,47 @@
 </section>
 </main>
 
-<!-- ===================== Diálogo: consultante ===================== -->
-<dialog class="dialogo" id="dlg-consultante">
-  <form method="dialog" id="form-consultante" class="dialogo__cuerpo">
-    <p class="sobretitulo">Ficha del consultante</p>
-    <h3 class="dialogo__titulo">¿Con quién <em>hablamos?</em></h3>
-    <div class="rejilla-2">
-      <label class="campo"><span>Nombre completo *</span><input name="nombre" required></label>
-      <label class="campo"><span>Documento</span><input name="documento" placeholder="C.C."></label>
-      <label class="campo"><span>Teléfono</span><input name="telefono" inputmode="tel"></label>
-      <label class="campo"><span>Correo</span><input name="correo" type="email"></label>
-      <label class="campo"><span>Municipio</span><input name="municipio" value="Mocoa"></label>
-      <label class="campo"><span>Zona</span><select name="zona"><option value="urbana">Urbana</option><option value="rural">Rural</option></select></label>
-    </div>
-    <label class="consentimiento"><input type="checkbox" name="consentimiento" required> Autorizo el tratamiento de mis datos personales para recibir orientación y agendar citas (Ley 1581 de 2012).</label>
-    <div class="dialogo__acciones"><button class="btn" value="cancelar" formnovalidate>Cancelar</button><button class="btn btn--tinta" value="ok">Guardar</button></div>
+<!-- ===================== Diálogo: nombre (paso 1 de identificación) ===================== -->
+<dialog class="dialogo dialogo--nombre" id="dlg-nombre">
+  <form method="dialog" id="form-nombre" class="dialogo__cuerpo">
+    <div class="avatar-amparo" aria-hidden="true"><span>A</span></div>
+    <p class="sobretitulo">Bienvenida</p>
+    <h3 class="dialogo__titulo">¡Hola! Soy Amparo. <em>¿Cómo le gusta que le llame?</em></h3>
+    <p class="nota">Solo un nombre o un apodo, para conversar con más confianza. No le pido cédula ni teléfono: esos datos solo se piden si decide agendar una cita.</p>
+    <label class="campo"><span>Nombre o apodo</span><input name="alias" maxlength="40" autocomplete="given-name" placeholder="Por ejemplo: Rosa, Don Carlos, Mafe"></label>
+    <div class="dialogo__acciones"><button class="btn" value="anonimo" formnovalidate>Prefiero no decirlo</button><button class="btn btn--sello" value="ok">Empezar a conversar</button></div>
   </form>
+</dialog>
+
+<!-- ===================== Diálogo: voces ===================== -->
+<dialog class="dialogo dialogo--ancho" id="dlg-voces">
+  <div class="dialogo__cuerpo">
+    <button class="dialogo__x" type="button" data-cerrar aria-label="Cerrar">×</button>
+    <p class="sobretitulo">La voz de Amparo</p>
+    <h3 class="dialogo__titulo">Elija la voz que le <em>haga sentir cómodo.</em></h3>
+    <p class="nota">Amparo no lee todo el texto: le explica lo importante con sus palabras, y cambia el ritmo y el tono según lo que dice (alegre, cálida, tranquila o seria).</p>
+    <div class="voces" id="lista-voces"></div>
+    <div class="voz-ajustes">
+      <label class="campo"><span>Velocidad · <b id="vel-valor">1.00×</b></span><input type="range" id="vel-voz" min="0.8" max="1.25" step="0.05" value="1"></label>
+      <label class="check"><input type="checkbox" id="voz-auto-chk"> Explicar cada respuesta en voz alta</label>
+    </div>
+    <details class="voz-descargar"><summary>¿Quiere más voces de Piper?</summary>
+      <p class="nota">Descárguelas una vez (funcionan sin internet) y reinicie el servidor:</p>
+      <pre>python -m scripts.descargar_voz --todas</pre>
+      <div id="voces-faltantes"></div>
+    </details>
+  </div>
+</dialog>
+
+<!-- ===================== Panel: historial ===================== -->
+<dialog class="cajon" id="dlg-historial">
+  <div class="cajon__cab">
+    <div><p class="sobretitulo">Historial</p><h3 class="dialogo__titulo">Sus <em>charlas</em></h3></div>
+    <button class="dialogo__x" type="button" data-cerrar aria-label="Cerrar">×</button>
+  </div>
+  <button class="btn btn--sello" id="btn-nueva-charla" type="button">＋ Nueva charla</button>
+  <input class="cajon__buscar" id="buscar-charla" type="search" placeholder="Buscar por nombre o tema…">
+  <div class="charlas" id="lista-charlas"></div>
 </dialog>
 
 <!-- ===================== Diálogo: cita ===================== -->
