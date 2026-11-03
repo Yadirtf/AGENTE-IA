@@ -4,7 +4,7 @@ Métricas de recuperación y clasificación (rápidas, sin LLM):
   - Exactitud del área jurídica detectada
   - Hit@3 / Hit@5: ¿aparece el documento esperado entre los primeros k?
   - MRR: rango recíproco medio del documento esperado
-  - Detección correcta de emergencias
+  - Detección correcta de emergencias y de pedidos fuera de los límites del agente
 Opcionalmente (con_llm=True) mide cobertura de palabras clave en la respuesta.
 """
 import json
@@ -24,16 +24,19 @@ async def ejecutar(con_llm: bool = False) -> dict:
         frags = rag.buscar(vec, c["pregunta"], k=5)
         area = orientacion.clasificar_area(rag.similitud_areas(vec), frags)["principal"]
         emerg = orientacion.detectar_emergencia(c["pregunta"]) is not None
+        limite = orientacion.detectar_limite(c["pregunta"]) is not None
         slugs = [f["slug"] for f in frags]
         rango = slugs.index(c["documento"]) + 1 if c["documento"] in slugs else None
         r = {
             "pregunta": c["pregunta"], "area_esperada": c["area"], "area_obtenida": area["slug"] if area else None,
             "documento": c["documento"], "rango": rango, "top": slugs[:3],
             "emergencia_esperada": c.get("emergencia", False), "emergencia": emerg,
+            "limite_esperado": c.get("limite", False), "limite": limite,
             "ms": round((time.perf_counter() - t0) * 1000),
         }
         if con_llm:
-            msgs = orientacion.construir_mensajes(c["pregunta"], frags, [], area, "sencillo")
+            msgs = orientacion.construir_mensajes(c["pregunta"], frags, [], area, "sencillo",
+                                                  orientacion.detectar_limite(c["pregunta"]))
             respuesta = orientacion.normalizar(await llm.completar(msgs))
             claves = c.get("claves", [])
             r["cobertura"] = round(sum(orientacion.normalizar(k) in respuesta for k in claves) / max(len(claves), 1), 2)
@@ -47,6 +50,7 @@ async def ejecutar(con_llm: bool = False) -> dict:
         "hit_5": round(sum(1 for r in resultados if r["rango"]) / n, 3),
         "mrr": round(sum(1 / r["rango"] for r in resultados if r["rango"]) / n, 3),
         "emergencias": round(sum(r["emergencia"] == r["emergencia_esperada"] for r in resultados) / n, 3),
+        "limites": round(sum(r["limite"] == r["limite_esperado"] for r in resultados) / n, 3),
         "latencia_ms": round(sum(r["ms"] for r in resultados) / n),
         "modelo_embeddings": config.EMBED_MODELO,
     }

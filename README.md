@@ -20,11 +20,13 @@ Todo corre **localmente en CPU**. Está pensado para un PC de **16 GB de RAM sin
 | **Tubería en vivo** | Debajo del chat se ve cada etapa (Voz → Whisper → Gemma → pgvector → LLM → Piper) y cuántos milisegundos tardó. |
 | **Voz con sello de lacre** | Se toca el sello para hablar. Una onda circular reacciona al micrófono y la grabación se corta sola tras 1,8 s de silencio. Cuando el agente responde en voz alta, la onda se pone verde. |
 | **Detección de emergencias** | Antes de llamar al LLM se revisa si el mensaje habla de violencia, riesgo de suicidio o abuso de menores. Si es así, aparece una franja con las líneas **123, 155, 141 y 122**, que se pueden marcar con un toque. |
-| **Taller de documentos** | Genera un derecho de petición, una tutela, un reclamo por garantía, un reclamo de habeas data o un preaviso de arriendo, con vista previa en hoja A4. El botón **Redactar hechos con IA** reescribe el relato en lenguaje formal, y el documento se puede imprimir o guardar como PDF. |
+| **Taller de documentos** | Genera un derecho de petición, una tutela, un reclamo por garantía, un reclamo de habeas data, un preaviso de arriendo o una solicitud de conciliación (cada documento impreso se registra en el caso), con vista previa en hoja A4. El botón **Redactar hechos con IA** reescribe el relato en lenguaje formal, y el documento se puede imprimir o guardar como PDF. |
 | **Calculadora de términos** | Cuenta días hábiles descontando los festivos de Colombia (Ley 51 de 1983, festivos móviles y de Pascua) y muestra un calendario con el día de vencimiento. |
 | **Directorio** | Entidades gratuitas de Mocoa/Putumayo y nacionales, filtradas por área (están guardadas en PostgreSQL). |
-| **Laboratorio** | Muestra la arquitectura, la latencia promedio de cada etapa, las consultas por área y una **evaluación con 21 casos de prueba** (exactitud del área, Hit@3, Hit@5, MRR, detección de emergencias y cobertura de la respuesta). |
-| **Archivo** | Historial de consultas guardado en PostgreSQL, que se puede retomar en cualquier momento. |
+| **Laboratorio** | Muestra la arquitectura, la latencia promedio de cada etapa, las consultas por área y una **evaluación con 28 casos de prueba** (exactitud del área, Hit@3, Hit@5, MRR, detección de emergencias, detección de límites y cobertura de la respuesta). |
+| **Casos** | Tablero por estado (abierto → orientado → remitido → en trámite → cerrado). Las carpetas se arrastran entre columnas y cada cambio queda en `historial_estados`. Incluye la agenda de citas con el consultorio. |
+| **Consultantes y citas** | Ficha del consultante con autorización de datos (Ley 1581 de 2012). Cada respuesta termina con una **remisión al consultorio jurídico** y un botón para agendar cita: se elige la entidad, uno de los próximos días hábiles (sin festivos) y una hora libre, y se genera una constancia imprimible. El caso pasa a «Remitido». |
+| **Límites del agente** | Detecta pedidos fuera de alcance (representarle, redactar demandas, predecir fallos, evadir la ley), los marca en la respuesta y remite al consultorio. Se evalúa con casos de prueba propios. |
 | **Modo sencillo / técnico** y **modo nocturno** | Cambian el nivel del lenguaje jurídico y la paleta de colores. |
 
 ---
@@ -104,8 +106,9 @@ app/
 sql/
   schema.sql       Tablas: catálogos, conocimiento vectorial, conversaciones y trazabilidad
   seed.sql         Áreas, rutas de acción y directorio de entidades
-conocimiento/      13 documentos de derecho colombiano (Markdown con metadatos)
-eval/casos.json    21 casos de prueba con área y fuente esperadas
+conocimiento/      17 documentos: Constitución (artículos clave), normas básicas, modelos de
+                   petición y tutela, guía de consultorios jurídicos y preguntas frecuentes
+eval/casos.json    28 casos de prueba con área, fuente y límite esperados
 scripts/           ingestar.py · evaluar.py · descargar_voz.py
 web/               Interfaz: index.html · estilos.css · app.js · terminos.js · plantillas.js
 ```
@@ -114,7 +117,18 @@ web/               Interfaz: index.html · estilos.css · app.js · terminos.js 
 
 - **Conocimiento (vectorial):** `documentos` → `fragmentos` (`embedding vector(768)` con índice HNSW, más `tsv` generado en español).
 - **Dominio:** `areas` (con embedding para clasificar), `rutas`, `entidades`.
-- **Transaccional y trazabilidad:** `conversaciones` → `mensajes` (fuentes, expediente y métricas de latencia en JSONB), `documentos_generados`, `evaluaciones`.
+- **Transaccional:** `consultantes` (con consentimiento de datos), `conversaciones` = **casos** (tipo de consulta, urgencia, **estado**, consultante), `historial_estados`, `citas_consultorio` (sin choques de horario por índice único), `documentos_generados`, y la vista `casos` para informes.
+- **Trazabilidad:** `mensajes` (fuentes, expediente, remisión y métricas de latencia en JSONB) y `evaluaciones`.
+
+| Requisito del punto 15 | Dónde está |
+|---|---|
+| Consultantes | tabla `consultantes` · ficha en el expediente |
+| Casos y estado de cada caso | `conversaciones.estado` + `historial_estados` + vista `casos` · pestaña **Casos** |
+| Tipo de consulta | `conversaciones.area` (clasificada con embeddings) |
+| Documentos generados | `documentos_generados` · pestaña **Documentos** |
+| Citas con el consultorio jurídico | `citas_consultorio` · botón de remisión y agenda |
+| Constitución, normas, modelos, guías, FAQ | `conocimiento/14`–`17` y `01`–`13`, vectorizados en `fragmentos` |
+| No reemplaza a un abogado y remite al consultorio | remisión fija al final de cada respuesta + detección de límites |
 
 ### Cómo responde
 
@@ -123,11 +137,12 @@ web/               Interfaz: index.html · estilos.css · app.js · terminos.js 
 3. **Recuperación híbrida.** Se toman los 30 mejores por coseno en pgvector y los 30 mejores por `ts_rank` en español, y se fusionan con RRF (k=60).
 4. **Expediente.** El área se calcula por similitud con los embeddings de cada área más los votos de los fragmentos recuperados. Luego se asignan urgencia, ruta y entidades.
 5. **Generación.** El prompt obliga a usar solo las fuentes, citar `[n]`, no inventar artículos y seguir un formato fijo (*En pocas palabras · Lo que dice la norma · Qué puede hacer · A dónde acudir*).
-6. **Trazabilidad.** Todo se guarda en PostgreSQL con sus tiempos.
+6. **Remisión.** Al final de cada respuesta el sistema añade (sin depender del LLM) el recordatorio de que Amparo no reemplaza a un abogado y la opción de agendar cita con el consultorio jurídico.
+7. **Trazabilidad.** Todo se guarda en PostgreSQL con sus tiempos, y el caso pasa de «abierto» a «orientado».
 
 ---
 
-## Guion sugerido para la presentación (5 min)
+## Guion sugerido para la presentación (6 min)
 
 1. **Inicio.** Muestre la portada y las fichas de ejemplo. Señale los indicadores de estado (LLM, embeddings, pgvector, Whisper, Piper).
 2. **Voz.** Toque el sello y diga *"La EPS no me quiere entregar un medicamento que me ordenó el médico"*. Muestre cómo se iluminan las etapas de la tubería, el sello de urgencia en el expediente, la ruta de acción y las citas enlazadas a las fuentes con su similitud.
@@ -135,7 +150,8 @@ web/               Interfaz: index.html · estilos.css · app.js · terminos.js 
 4. **Documento.** Pulse **Convertir en documento**. Se sugiere la tutela; luego pulse **Redactar hechos con IA** e **Imprimir**.
 5. **Términos.** Calcule los 15 días hábiles de un derecho de petición y muestre que el calendario salta los festivos.
 6. **Seguridad.** Escriba *"mi pareja me pega"* y muestre la franja de emergencia.
-7. **Laboratorio.** Ejecute la evaluación y explique Hit@k, MRR y la exactitud por área.
+7. **Límites y remisión.** Pregunte *"¿usted me puede representar en la audiencia?"*: aparece el aviso de límite. Pulse **Agendar cita con el consultorio jurídico**, elija día y hora y muestre la constancia. En **Casos**, el expediente ya está en «Remitido»; arrástrelo a «En trámite».
+8. **Laboratorio.** Ejecute la evaluación y explique Hit@k, MRR y la exactitud por área.
 
 ---
 

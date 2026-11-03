@@ -10,6 +10,10 @@ const leer = (k) => { try { return localStorage.getItem(k); } catch (_) { return
 const estado = {
   conversacion: null, modo: "sencillo", vozAuto: leer("amparo-voz") !== "0", ocupado: false,
   fuentes: [], expediente: null, folio: 0, sistema: null, ultimoUsuario: [],
+  caso: null,            // { estado, consultante_id, nombre, citas, ... }
+};
+const ESTADOS = {
+  abierto: "Abierto", orientado: "Orientado", remitido: "Remitido al consultorio", en_tramite: "En trámite", cerrado: "Cerrado",
 };
 
 function toast(msg, ms = 3200) {
@@ -178,15 +182,17 @@ async function enviar(texto, canal = "texto", msStt = null) {
   agregarUsuario(texto, canal);
   const nodo = nuevoFolio();
   const cuerpo = $(".folio__cuerpo", nodo);
-  let respuesta = "", primero = true, metricas = null;
+  let respuesta = "", primero = true, metricas = null, remisionDatos = null;
   try {
     const resp = await fetch("/api/consulta", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ texto, conversacion_id: estado.conversacion, modo: estado.modo, canal, ms_stt: msStt }),
+      body: JSON.stringify({ texto, conversacion_id: estado.conversacion, modo: estado.modo, canal, ms_stt: msStt, consultante_id: estado.consultantePendiente?.id || null }),
     });
     if (!resp.ok) throw new Error(await resp.text());
     for await (const { tipo, datos } of eventos(resp)) {
-      if (tipo === "conversacion") { estado.conversacion = datos.id; $("#exp-num").textContent = numeroExpediente(datos.id); }
+      if (tipo === "conversacion") { estado.conversacion = datos.id; estado.consultantePendiente = null; $("#exp-num").textContent = numeroExpediente(datos.id); }
+      else if (tipo === "limite") marcarLimite(nodo, datos);
+      else if (tipo === "remision") remisionDatos = datos;
       else if (tipo === "etapa") etapa(datos.etapa, datos.estado, datos.ms);
       else if (tipo === "emergencia") mostrarEmergencia(datos);
       else if (tipo === "fuentes") pintarFuentes(datos);
@@ -201,8 +207,10 @@ async function enviar(texto, canal = "texto", msStt = null) {
     }
     cuerpo.innerHTML = md(respuesta);
     enlazarCitas(cuerpo);
+    if (remisionDatos) pintarRemision(nodo, remisionDatos);
     pieFolio(nodo, respuesta);
     if (metricas) pintarMetricas(metricas);
+    refrescarCaso();
     if (estado.vozAuto && respuesta) hablar(respuesta);
   } catch (err) {
     cuerpo.innerHTML = `<p><strong>No pude responder</strong></p><p>${esc(err.message)}</p>`;
@@ -295,7 +303,7 @@ function mostrarEmergencia(e) {
 }
 
 function limpiarConsulta() {
-  estado.conversacion = null; estado.folio = 0; estado.ultimoUsuario = [];
+  estado.conversacion = null; estado.caso = null; pintarCaso(null); estado.folio = 0; estado.ultimoUsuario = [];
   hilo.innerHTML = ""; $("#fuentes").innerHTML = '<p class="nota">Las fuentes aparecerán aquí.</p>';
   $("#metricas-turno").innerHTML = ""; $("#exp-num").textContent = "—";
   $("#exp-area").innerHTML = '<span class="vacio">Sin clasificar</span>'; $("#exp-estampa").hidden = true;
@@ -471,7 +479,11 @@ function pintarHoja() {
   const v = {}; plantilla.campos.forEach((c) => (v[c.id] = valores[c.id] ?? c.valor ?? ""));
   $("#hoja").innerHTML = plantilla.render(v);
 }
-$("#btn-imprimir").addEventListener("click", () => window.print());
+$("#btn-imprimir").addEventListener("click", () => {
+  window.print();
+  api("/api/documentos", { method: "POST", body: JSON.stringify({ tipo: plantilla.nombre, campos: valores, conversacion_id: estado.conversacion, consultante_id: estado.caso?.consultante_id || null }) })
+    .then(() => toast("Documento registrado en el caso")).catch(() => {});
+});
 $("#btn-redactar").addEventListener("click", async () => {
   const hechos = valores.hechos?.trim();
   if (!hechos) return toast("Escriba primero los hechos con sus palabras");
@@ -483,7 +495,7 @@ $("#btn-redactar").addEventListener("click", async () => {
   finally { b.disabled = false; b.textContent = "✦ Redactar hechos con IA"; }
 });
 function desdeConversacion() {
-  const mapa = { salud: "tutela", derechos_fundamentales: "peticion", consumidor: "garantia", deudas: "habeas", arrendamiento: "preaviso" };
+  const mapa = { salud: "tutela", derechos_fundamentales: "peticion", consumidor: "garantia", deudas: "habeas", arrendamiento: "preaviso", familia: "conciliacion" };
   const id = mapa[estado.expediente?.area?.slug] || "peticion";
   plantilla = Plantillas.find((p) => p.id === id);
   valores.hechos = estado.ultimoUsuario.join("\n");
@@ -560,6 +572,7 @@ function pintarEvaluacion(ev) {
   const s = ev.resumen;
   $("#diales").innerHTML = dial(s.exactitud_area, "Área correcta", "clasificación") + dial(s.hit_3, "Hit@3", "fuente en top 3") +
     dial(s.hit_5, "Hit@5", "fuente en top 5") + dial(s.mrr, "MRR", "rango recíproco") + dial(s.emergencias, "Emergencias", "detección") +
+    (s.limites != null ? dial(s.limites, "Límites", "pedidos fuera de alcance") : "") +
     (s.cobertura_respuesta != null ? dial(s.cobertura_respuesta, "Cobertura", "claves en respuesta") : "") +
     `<div class="dial"><svg viewBox="0 0 96 96"><text x="48" y="56" text-anchor="middle" font-family="JetBrains Mono" font-size="20" font-weight="600" fill="currentColor">${s.latencia_ms}</text></svg><b>ms / caso</b><small>${s.casos} casos</small></div>`;
   $("#tabla-eval").innerHTML = `<table><thead><tr><th>#</th><th>Pregunta</th><th>Área esperada</th><th>Obtenida</th><th>Rango fuente</th><th>ms</th></tr></thead><tbody>${
@@ -582,7 +595,9 @@ alAbrir.laboratorio = async () => {
     const l = m.latencias || {};
     const etapas = [["STT (Whisper)", l.stt], ["Embedding", l.embedding], ["pgvector", l.pgvector], ["Primer token", l.primer_token], ["LLM completo", l.llm]];
     const max = Math.max(1, ...etapas.map(([, v]) => +v || 0));
-    $("#lab-latencias").innerHTML = etapas.map(([n, v]) => `<div class="fila"><span>${n}</span><div class="pista"><span style="width:${((+v || 0) / max) * 100}%"></span></div><small>${v == null ? "—" : v + " ms"}</small></div>`).join("") +
+    const est = Object.fromEntries((m.por_estado || []).map((e) => [e.estado, e.n]));
+    const cit = (m.citas || []).reduce((a, c) => a + c.n, 0);
+    $("#lab-latencias").innerHTML = `<div class="kpis"><div><b>${m.consultantes ?? 0}</b><small>consultantes</small></div><div><b>${Object.values(est).reduce((a, b) => a + b, 0)}</b><small>casos</small></div><div><b>${est.remitido || 0}</b><small>remitidos</small></div><div><b>${cit}</b><small>citas</small></div><div><b>${m.documentos_generados}</b><small>documentos</small></div></div>` + etapas.map(([n, v]) => `<div class="fila"><span>${n}</span><div class="pista"><span style="width:${((+v || 0) / max) * 100}%"></span></div><small>${v == null ? "—" : v + " ms"}</small></div>`).join("") +
       `<p class="nota">${l.respuestas || 0} respuestas · ${m.documentos_generados} documentos generados · ${m.canales.map((c) => `${c.n} por ${c.canal}`).join(", ") || "sin consultas"}</p>`;
     const maxA = Math.max(1, ...m.por_area.map((a) => a.n));
     $("#lab-areas").innerHTML = m.por_area.map((a) => `<div class="fila"><span>${esc(a.simbolo)} ${esc(a.nombre)}</span><div class="pista"><span style="width:${(a.n / maxA) * 100}%;background:${a.color}"></span></div><small>${a.n}</small></div>`).join("");
@@ -598,29 +613,203 @@ $("#btn-evaluar").addEventListener("click", async () => {
 });
 
 /* =====================================================================
-   Archivo (historial)
+   Casos: tablero por estado + agenda de citas
    ===================================================================== */
-alAbrir.archivo = async () => {
-  try {
-    const lista = await api("/api/conversaciones");
-    $("#archivo").innerHTML = `<button class="carpeta" id="nueva" style="--c:var(--lacre)"><small>Nueva</small><h4>＋ Abrir un expediente nuevo</h4></button>` +
-      lista.map((c) => `<div class="carpeta" data-id="${c.id}" style="--c:${c.color || "var(--tinta-3)"}" role="button" tabindex="0">
-        <button class="borrar" data-borrar="${c.id}" title="Eliminar">×</button>
-        <small>${numeroExpediente(c.id)} · ${new Date(c.actualizada).toLocaleString("es-CO", { dateStyle: "medium", timeStyle: "short" })}</small>
-        <h4>${esc(c.titulo || "Sin título")}</h4><span class="area">${esc(c.simbolo || "")} ${esc(c.area || "Sin área")}</span>
-        <span class="nota"> · ${c.mensajes} mensajes · urgencia ${esc(c.urgencia || "—")}</span></div>`).join("");
-    $("#nueva").addEventListener("click", () => { limpiarConsulta(); abrir("consulta"); });
-    $$(".carpeta[data-id]").forEach((el) => el.addEventListener("click", async (e) => {
+alAbrir.casos = async () => {
+  let lista = [], citas = [];
+  try { [lista, citas] = await Promise.all([api("/api/conversaciones"), api("/api/citas")]); }
+  catch (_) { return toast("No pude cargar los casos"); }
+  $("#tablero").innerHTML = Object.entries(ESTADOS).map(([k, nombre]) => {
+    const items = lista.filter((c) => c.estado === k);
+    return `<div class="columna" data-estado="${k}"><div class="columna__cab"><span>${nombre}</span><b>${items.length}</b></div>
+      <div class="columna__lista">${items.map((c) => `
+        <div class="carpeta" draggable="true" data-id="${c.id}" style="--c:${c.color || "var(--tinta-3)"}" tabindex="0">
+          <button class="borrar" data-borrar="${c.id}" title="Eliminar">×</button>
+          <small>${numeroExpediente(c.id)} · ${new Date(c.actualizada).toLocaleDateString("es-CO", { day: "numeric", month: "short" })}</small>
+          <h4>${esc(c.titulo || "Sin título")}</h4>
+          <span class="area">${esc(c.simbolo || "")} ${esc(c.area || "Sin área")}</span>
+          <div class="carpeta__meta">
+            <span>${c.consultante ? "👤 " + esc(c.consultante) : '<i class="nota">sin consultante</i>'}</span>
+            <span>✉ ${c.mensajes} · ✎ ${c.documentos}${c.proxima_cita ? " · 📅 " + esc(c.proxima_cita) : ""}</span>
+          </div>
+          <select class="mover" data-mover="${c.id}" aria-label="Cambiar estado">${Object.entries(ESTADOS).map(([e, n]) => `<option value="${e}" ${e === k ? "selected" : ""}>${n}</option>`).join("")}</select>
+        </div>`).join("") || '<p class="nota vacio-col">Sin casos</p>'}</div></div>`;
+  }).join("");
+
+  const mover = async (id, nuevo) => {
+    await api(`/api/casos/${id}`, { method: "PATCH", body: JSON.stringify({ estado: nuevo, notas: "Cambio manual desde el tablero" }) });
+    if (id === estado.conversacion) refrescarCaso();
+    toast(`Caso movido a «${ESTADOS[nuevo]}»`); alAbrir.casos();
+  };
+  $$("#tablero .carpeta").forEach((el) => {
+    el.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/plain", el.dataset.id); el.classList.add("arrastrando"); });
+    el.addEventListener("dragend", () => el.classList.remove("arrastrando"));
+    el.addEventListener("click", async (e) => {
+      if (e.target.closest("select")) return;
       if (e.target.dataset.borrar) {
         e.stopPropagation();
+        if (!confirm("¿Eliminar este caso y su historial?")) return;
         await api(`/api/conversaciones/${e.target.dataset.borrar}`, { method: "DELETE" });
         if (estado.conversacion === e.target.dataset.borrar) limpiarConsulta();
-        return alAbrir.archivo();
+        return alAbrir.casos();
       }
       cargarConversacion(el.dataset.id);
-    }));
-  } catch (_) { toast("No pude cargar el archivo"); }
+    });
+  });
+  $$("#tablero select.mover").forEach((sel) => sel.addEventListener("change", () => mover(sel.dataset.mover, sel.value)));
+  $$("#tablero .columna").forEach((col) => {
+    col.addEventListener("dragover", (e) => { e.preventDefault(); col.classList.add("sobre"); });
+    col.addEventListener("dragleave", () => col.classList.remove("sobre"));
+    col.addEventListener("drop", (e) => { e.preventDefault(); col.classList.remove("sobre"); const id = e.dataTransfer.getData("text/plain"); if (id) mover(id, col.dataset.estado); });
+  });
+
+  $("#agenda").innerHTML = citas.length ? `<table><thead><tr><th>Fecha</th><th>Hora</th><th>Consultante</th><th>Entidad</th><th>Modalidad</th><th>Caso</th><th>Estado</th></tr></thead><tbody>${
+    citas.map((c) => `<tr><td>${new Date(c.fecha + "T12:00").toLocaleDateString("es-CO", { weekday: "short", day: "numeric", month: "short" })}</td><td><code>${c.hora}</code></td>
+      <td>${esc(c.consultante)}${c.telefono ? `<br><small class="nota">${esc(c.telefono)}</small>` : ""}</td><td>${esc(c.entidad)}</td><td>${esc(c.modalidad)}</td><td>${esc(c.caso || "—")}</td>
+      <td><select data-cita="${c.id}" class="estado-cita" data-v="${c.estado}">${["solicitada", "confirmada", "atendida", "cancelada"].map((e) => `<option ${e === c.estado ? "selected" : ""}>${e}</option>`).join("")}</select></td></tr>`).join("")}</tbody></table>`
+    : '<p class="nota">Aún no hay citas. Agéndelas desde la remisión al final de cada respuesta.</p>';
+  $$("#agenda select[data-cita]").forEach((sel) => sel.addEventListener("change", async () => {
+    await api(`/api/citas/${sel.dataset.cita}`, { method: "PATCH", body: JSON.stringify({ estado: sel.value }) });
+    toast(`Cita ${sel.value}`); alAbrir.casos();
+  }));
 };
+$("#btn-nuevo-caso").addEventListener("click", () => { limpiarConsulta(); abrir("consulta"); });
+
+/* =====================================================================
+   Caso actual: consultante, estado, remisión y citas
+   ===================================================================== */
+async function refrescarCaso() {
+  if (!estado.conversacion) return pintarCaso(null);
+  try { estado.caso = await api(`/api/casos/${estado.conversacion}`); pintarCaso(estado.caso); } catch (_) {}
+}
+function pintarCaso(c) {
+  const est = c?.estado || "abierto";
+  $("#exp-estado").dataset.estado = est;
+  $("#exp-estado").innerHTML = `<span>${ESTADOS[est]}</span>${c?.citas?.filter((x) => x.estado !== "cancelada").map((x) => `<small>📅 ${new Date(x.fecha + "T12:00").toLocaleDateString("es-CO", { day: "numeric", month: "short" })} · ${x.hora} · ${esc(x.entidad)}</small>`).join("") || ""}`;
+  const p = estado.consultantePendiente;
+  if (!c?.consultante_id && p) c = { ...(c || {}), consultante_id: p.id, nombre: p.nombre, documento: p.documento, municipio: p.municipio, zona: p.zona, telefono: p.telefono };
+  $("#exp-consultante").innerHTML = c?.consultante_id
+    ? `<b>${esc(c.nombre)}</b><span class="nota">${esc([c.documento, c.municipio, c.zona].filter(Boolean).join(" · "))}</span><button class="chip-btn" id="btn-consultante" type="button">Editar</button>`
+    : `<button class="chip-btn" id="btn-consultante" type="button">＋ Registrar consultante</button>`;
+  $("#btn-consultante").addEventListener("click", () => abrirConsultante());
+}
+
+function abrirConsultante(alGuardar) {
+  const dlg = $("#dlg-consultante"), f = $("#form-consultante");
+  f.reset();
+  const c = estado.caso?.consultante_id ? estado.caso : estado.consultantePendiente;
+  if (c) ["nombre", "documento", "telefono", "correo", "municipio", "zona"].forEach((k) => { if (c[k]) f.elements[k].value = c[k]; });
+  f.onsubmit = async (e) => {
+    if (e.submitter?.value !== "ok") return;
+    e.preventDefault();
+    if (!f.reportValidity()) return;
+    const datos = Object.fromEntries(new FormData(f)); datos.consentimiento = f.elements.consentimiento.checked;
+    datos.conversacion_id = estado.conversacion;
+    try {
+      const r = await api("/api/consultantes", { method: "POST", body: JSON.stringify(datos) });
+      dlg.close(); toast(`Consultante ${r.nombre} registrado`);
+      if (!estado.conversacion) estado.consultantePendiente = r;
+      await refrescarCaso(); alGuardar?.(r);
+    } catch (err) { toast("No se pudo guardar: " + err.message); }
+  };
+  dlg.showModal();
+}
+
+function marcarLimite(nodo, l) {
+  const cab = $(".folio__cab", nodo);
+  cab.insertAdjacentHTML("afterend", `<div class="limite">⚠ Límite del agente · ${esc(l.mensaje)}</div>`);
+}
+
+function pintarRemision(nodo, r) {
+  const div = document.createElement("div");
+  div.className = "remision";
+  div.innerHTML = `<div class="remision__sello" aria-hidden="true">CJ</div>
+    <div><p>${esc(r.texto)}</p>
+    <button class="btn btn--sello btn--chico" type="button">📅 Agendar cita con el consultorio jurídico</button></div>`;
+  $(".folio", nodo).appendChild(div);
+  $("button", div).addEventListener("click", () => abrirCita(r.entidades || []));
+}
+
+/* ---------- Diálogo de cita (3 pasos en una sola vista) ---------- */
+function proximosHabiles(n) {
+  const dias = []; let d = new Date(); d.setHours(12, 0, 0, 0);
+  while (dias.length < n) { d = new Date(d.getTime() + 864e5); if (Terminos.esHabil(d)) dias.push(new Date(d)); }
+  return dias;
+}
+async function abrirCita(entidades) {
+  if (!entidades.length) { try { entidades = (await api("/api/entidades")).filter((e) => e.atiende_citas); } catch (_) {} }
+  const dlg = $("#dlg-cita"), cuerpo = $("#cita-cuerpo");
+  const sel = { entidad: entidades[0]?.id, fecha: null, hora: null, modalidad: "presencial" };
+  const dias = proximosHabiles(10);
+  sel.fecha = Terminos.iso(dias[0]);
+  const resumen = estado.ultimoUsuario.slice(-2).join(" ").slice(0, 400);
+  const c = estado.caso;
+  cuerpo.innerHTML = `
+    <button class="dialogo__x" type="button" aria-label="Cerrar">×</button>
+    <p class="sobretitulo">Remisión al consultorio jurídico</p>
+    <h3 class="dialogo__titulo">Agende su cita <em>gratuita.</em></h3>
+    <div class="paso"><span class="paso__n">1</span><b>¿Dónde?</b></div>
+    <div class="opciones" id="cita-entidades">${entidades.map((e) => `<button type="button" class="opcion ${e.id === sel.entidad ? "activa" : ""}" data-id="${e.id}"><b>${esc(e.nombre)}</b><small>${esc(e.horario || e.tipo || "")}</small></button>`).join("")}</div>
+    <div class="paso"><span class="paso__n">2</span><b>¿Cuándo?</b> <small class="nota">Solo días hábiles; se saltan los festivos.</small></div>
+    <div class="dias" id="cita-dias">${dias.map((d) => `<button type="button" class="dia-btn ${Terminos.iso(d) === sel.fecha ? "activa" : ""}" data-f="${Terminos.iso(d)}"><small>${d.toLocaleDateString("es-CO", { weekday: "short" })}</small><b>${d.getDate()}</b><small>${d.toLocaleDateString("es-CO", { month: "short" })}</small></button>`).join("")}</div>
+    <div class="horas" id="cita-horas"></div>
+    <div class="paso"><span class="paso__n">3</span><b>Datos de la cita</b></div>
+    <form id="form-cita" class="rejilla-2">
+      <label class="campo"><span>Modalidad</span><select name="modalidad"><option value="presencial">Presencial</option><option value="telefonica">Telefónica</option><option value="virtual">Virtual</option></select></label>
+      <label class="campo"><span>Nombre completo *</span><input name="nombre" required value="${esc(c?.nombre || "")}"></label>
+      <label class="campo"><span>Documento</span><input name="documento" value="${esc(c?.documento || "")}"></label>
+      <label class="campo"><span>Teléfono *</span><input name="telefono" required inputmode="tel" value="${esc(c?.telefono || "")}"></label>
+      <label class="campo campo--ancho"><span>Motivo de la consulta</span><textarea name="motivo" rows="3">${esc(resumen)}</textarea></label>
+      <label class="consentimiento campo--ancho"><input type="checkbox" name="consentimiento" required ${c?.consultante_id ? "checked" : ""}> Autorizo el tratamiento de mis datos para gestionar la cita (Ley 1581 de 2012).</label>
+    </form>
+    <div class="dialogo__acciones"><button class="btn" type="button" data-cerrar>Cancelar</button><button class="btn btn--sello" type="button" id="btn-confirmar-cita">Confirmar cita</button></div>`;
+  const cerrar = () => dlg.close();
+  $(".dialogo__x", cuerpo).onclick = cerrar; $("[data-cerrar]", cuerpo).onclick = cerrar;
+  const horas = async () => {
+    sel.hora = null;
+    const lista = await api(`/api/citas/disponibilidad?entidad_id=${sel.entidad}&fecha=${sel.fecha}`);
+    $("#cita-horas").innerHTML = lista.map((h) => `<button type="button" class="hora-btn" data-h="${h.hora}" ${h.libre ? "" : "disabled"}>${h.hora}</button>`).join("");
+    $$("#cita-horas .hora-btn").forEach((b) => b.onclick = () => { sel.hora = b.dataset.h; $$("#cita-horas .hora-btn").forEach((x) => x.classList.toggle("activa", x === b)); });
+  };
+  $$("#cita-entidades .opcion").forEach((b) => b.onclick = () => { sel.entidad = +b.dataset.id; $$("#cita-entidades .opcion").forEach((x) => x.classList.toggle("activa", x === b)); horas(); });
+  $$("#cita-dias .dia-btn").forEach((b) => b.onclick = () => { sel.fecha = b.dataset.f; $$("#cita-dias .dia-btn").forEach((x) => x.classList.toggle("activa", x === b)); horas(); });
+  $("#btn-confirmar-cita").onclick = async () => {
+    const f = $("#form-cita");
+    if (!sel.hora) return toast("Elija una hora disponible");
+    if (!f.reportValidity()) return;
+    const d = Object.fromEntries(new FormData(f));
+    try {
+      const r = await api("/api/citas", { method: "POST", body: JSON.stringify({
+        entidad_id: sel.entidad, fecha: sel.fecha, hora: sel.hora, modalidad: d.modalidad, motivo: d.motivo, conversacion_id: estado.conversacion,
+        consultante: { nombre: d.nombre, documento: d.documento, telefono: d.telefono, municipio: c?.municipio || "Mocoa", zona: c?.zona || null, correo: c?.correo || null, consentimiento: f.elements.consentimiento.checked },
+      }) });
+      constancia(r, d);
+      refrescarCaso();
+    } catch (err) { toast(err.message.includes("409") || err.message.includes("tomado") ? "Ese horario ya fue tomado, elija otro" : "No se pudo agendar: " + err.message); horas(); }
+  };
+  await horas();
+  dlg.showModal();
+}
+
+function constancia(r, d) {
+  const fecha = new Date(r.fecha + "T12:00").toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  $("#cita-cuerpo").innerHTML = `
+    <button class="dialogo__x" type="button" aria-label="Cerrar">×</button>
+    <div class="constancia" id="constancia">
+      <div class="constancia__sello">AGENDADA</div>
+      <p class="sobretitulo">Constancia de cita Nº ${String(r.id).padStart(5, "0")}</p>
+      <h3 class="dialogo__titulo">${esc(r.entidad?.nombre || "")}</h3>
+      <div class="constancia__fecha"><b>${fecha}</b><span>${r.hora} · ${esc(r.modalidad)}</span></div>
+      <p><b>Consultante:</b> ${esc(d.nombre)}${d.documento ? " · C.C. " + esc(d.documento) : ""}</p>
+      <p><b>Motivo:</b> ${esc(d.motivo || "—")}</p>
+      <p class="nota">Lleve su documento de identidad, un recibo de servicio público (estrato) y todos los papeles del caso. Expediente ${estado.conversacion ? numeroExpediente(estado.conversacion) : "—"}.</p>
+    </div>
+    <div class="dialogo__acciones"><button class="btn" type="button" data-cerrar>Cerrar</button><button class="btn btn--tinta" type="button" id="btn-imprimir-constancia">Imprimir constancia</button></div>`;
+  const dlg = $("#dlg-cita");
+  $(".dialogo__x", dlg).onclick = () => dlg.close(); $("[data-cerrar]", dlg).onclick = () => dlg.close();
+  $("#btn-imprimir-constancia").onclick = () => { document.body.classList.add("imprimiendo-constancia"); window.print(); document.body.classList.remove("imprimiendo-constancia"); };
+  toast("Cita agendada · el caso pasó a «Remitido al consultorio»");
+}
 
 async function cargarConversacion(id) {
   const msgs = await api(`/api/conversaciones/${id}`);
@@ -631,14 +820,17 @@ async function cargarConversacion(id) {
     else {
       const n = nuevoFolio(); const c = $(".folio__cuerpo", n);
       c.innerHTML = md(m.contenido); enlazarCitas(c); pieFolio(n, m.contenido);
+      if (m.expediente?.remision) pintarRemision(n, m.expediente.remision);
       if (m.expediente) pintarExpediente(m.expediente);
       if (m.fuentes) pintarFuentes(m.fuentes);
       if (m.metricas) pintarMetricas(m.metricas);
     }
   }
+  refrescarCaso();
 }
 
 /* ---------- Arranque ---------- */
+pintarCaso(null);
 cargarEstado();
 setInterval(cargarEstado, 30000);
 if ("speechSynthesis" in window) speechSynthesis.getVoices();
