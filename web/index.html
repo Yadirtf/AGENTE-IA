@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Amparo · Orientación jurídica básica</title>
+  <meta name="description" content="Agente conversacional de orientación jurídica básica con voz, PostgreSQL y pgvector.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%237A1F2B'/%3E%3Ctext x='32' y='44' font-size='34' text-anchor='middle' fill='%23F3EBDD' font-family='Georgia' font-style='italic'%3EA%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght,SOFT@0,9..144,300..900,0..100;1,9..144,300..900,0..100&family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/estilos.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <filter id="tinta"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" result="r"/><feDisplacementMap in="SourceGraphic" in2="r" scale="2.2"/></filter>
+</svg>
+
+<!-- ===================== Emergencia ===================== -->
+<div id="emergencia" class="emergencia" hidden role="alert">
+  <div class="emergencia__txt"><strong>Su seguridad es primero.</strong> <span id="emergencia-msg"></span></div>
+  <div class="emergencia__lineas" id="emergencia-lineas"></div>
+  <button class="emergencia__x" aria-label="Cerrar aviso" onclick="this.parentElement.hidden=true;document.documentElement.style.removeProperty('--alerta')">×</button>
+</div>
+
+<!-- ===================== Cabecera ===================== -->
+<header class="cabecera">
+  <div class="cabecera__marca">
+    <div class="sello" aria-hidden="true"><span>A</span></div>
+    <div>
+      <h1 class="logotipo">Amparo</h1>
+      <p class="lema">Orientación jurídica básica · <span id="fecha-hoy"></span> · Putumayo, Colombia</p>
+    </div>
+  </div>
+  <div class="cabecera__estado" id="estado" aria-label="Estado de los componentes"></div>
+  <div class="cabecera__acciones">
+    <div class="interruptor" role="group" aria-label="Nivel de lenguaje">
+      <button data-modo="sencillo" class="activo">Sencillo</button><button data-modo="tecnico">Técnico</button>
+    </div>
+    <button class="icono-btn" id="btn-voz-auto" title="Leer respuestas en voz alta" aria-pressed="true">🔊</button>
+    <button class="icono-btn" id="btn-tema" title="Modo nocturno">☾</button>
+  </div>
+</header>
+
+<nav class="pestanas" role="tablist">
+  <button role="tab" data-vista="consulta" class="activa">Consulta</button>
+  <button role="tab" data-vista="documentos">Documentos</button>
+  <button role="tab" data-vista="terminos">Términos</button>
+  <button role="tab" data-vista="directorio">Directorio</button>
+  <button role="tab" data-vista="laboratorio">Laboratorio</button>
+  <button role="tab" data-vista="archivo">Archivo</button>
+</nav>
+
+<main>
+<!-- ===================== CONSULTA ===================== -->
+<section class="vista activa" id="vista-consulta">
+  <div class="consulta">
+    <!-- Expediente -->
+    <aside class="expediente" id="expediente">
+      <div class="caratula">
+        <div class="caratula__num">Expediente <b id="exp-num">—</b></div>
+        <div class="caratula__area" id="exp-area"><span class="vacio">Sin clasificar</span></div>
+        <div id="exp-estampa" class="estampa" hidden></div>
+      </div>
+      <div class="bloque">
+        <h3>Urgencia</h3>
+        <div class="semaforo" id="exp-urgencia" data-nivel="ninguna">
+          <i></i><i></i><i></i><i></i>
+        </div>
+        <p class="nota" id="exp-urgencia-razon">Cuando nos cuente su caso, valoramos la urgencia.</p>
+      </div>
+      <div class="bloque">
+        <h3>Diagnóstico del caso</h3>
+        <div id="exp-distribucion" class="distribucion"><p class="nota">Probabilidad por área jurídica.</p></div>
+      </div>
+      <div class="bloque">
+        <h3>Ruta de acción</h3>
+        <ol id="exp-ruta" class="ruta"><li class="nota">Aparecerá paso a paso.</li></ol>
+      </div>
+      <div class="bloque">
+        <h3>Dónde acudir</h3>
+        <ul id="exp-entidades" class="entidades-mini"><li class="nota">Entidades gratuitas sugeridas.</li></ul>
+      </div>
+    </aside>
+
+    <!-- Conversación -->
+    <div class="mesa">
+      <div class="hilo" id="hilo">
+        <div class="bienvenida" id="bienvenida">
+          <p class="sobretitulo">Consulta gratuita · sin abogado · por texto o voz</p>
+          <h2>Cuéntenos <em>qué le pasó.</em></h2>
+          <p class="entrada">Amparo le explica sus derechos según la ley colombiana, le dice <b>qué hacer</b>, <b>en qué plazo</b> y <b>a dónde acudir</b>, citando siempre la norma de donde sale cada respuesta.</p>
+          <div class="fichas" id="fichas"></div>
+          <p class="aviso">Amparo orienta; no reemplaza la asesoría de un abogado. Para su caso concreto acuda a un consultorio jurídico o a la Personería.</p>
+        </div>
+      </div>
+
+      <div class="tuberia" id="tuberia" aria-label="Recorrido de la consulta">
+        <div class="nodo" data-etapa="voz"><b>Voz</b><small>micrófono</small></div>
+        <div class="nodo" data-etapa="stt"><b>Whisper</b><small>STT</small></div>
+        <div class="nodo" data-etapa="embedding"><b>Gemma</b><small>embedding</small></div>
+        <div class="nodo" data-etapa="pgvector"><b>pgvector</b><small>búsqueda</small></div>
+        <div class="nodo" data-etapa="llm"><b>LLM</b><small>razona</small></div>
+        <div class="nodo" data-etapa="tts"><b>Piper</b><small>TTS</small></div>
+      </div>
+
+      <form class="redactor" id="redactor" autocomplete="off">
+        <button type="button" class="microfono" id="microfono" aria-label="Hablar">
+          <canvas id="onda" width="160" height="160"></canvas>
+          <span class="microfono__sello">
+            <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M12 15a3 3 0 0 0 3-3V6a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-2.08A7 7 0 0 0 19 12h-2Z"/></svg>
+          </span>
+        </button>
+        <div class="redactor__campo">
+          <textarea id="entrada" rows="1" placeholder="Escriba su situación con sus palabras… (Enter para enviar)"></textarea>
+          <div class="redactor__ayuda" id="ayuda-voz">Toque el sello para hablar · Shift+Enter: nueva línea</div>
+        </div>
+        <button class="enviar" id="enviar" type="submit" aria-label="Enviar">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3 20.5 21 12 3 3.5 3 10l12 2-12 2z"/></svg>
+        </button>
+      </form>
+    </div>
+
+    <!-- Fuentes -->
+    <aside class="fuentes">
+      <div class="fuentes__cab">
+        <h3>Fuentes consultadas</h3>
+        <span class="nota" id="fuentes-meta">PostgreSQL · pgvector</span>
+      </div>
+      <div id="fuentes" class="fuentes__lista">
+        <p class="nota">Cada respuesta muestra aquí los fragmentos de ley recuperados, con su similitud semántica.</p>
+      </div>
+      <div class="metricas-turno" id="metricas-turno"></div>
+    </aside>
+  </div>
+</section>
+
+<!-- ===================== DOCUMENTOS ===================== -->
+<section class="vista" id="vista-documentos">
+  <div class="taller">
+    <div class="taller__form">
+      <p class="sobretitulo">Taller de documentos</p>
+      <h2 class="titulo-seccion">Redacte su escrito <em>en minutos.</em></h2>
+      <div class="tipos" id="tipos-doc"></div>
+      <form id="form-doc" class="form-doc"></form>
+      <div class="taller__acciones">
+        <button class="btn btn--tinta" id="btn-redactar" type="button">✦ Redactar hechos con IA</button>
+        <button class="btn btn--sello" id="btn-imprimir" type="button">Imprimir / PDF</button>
+      </div>
+    </div>
+    <div class="taller__papel"><article class="hoja" id="hoja"></article></div>
+  </div>
+</section>
+
+<!-- ===================== TÉRMINOS ===================== -->
+<section class="vista" id="vista-terminos">
+  <div class="terminos">
+    <div class="terminos__form">
+      <p class="sobretitulo">Calculadora de términos legales</p>
+      <h2 class="titulo-seccion">¿Hasta cuándo <em>tiene plazo?</em></h2>
+      <p class="entrada">Cuenta días hábiles descontando fines de semana y festivos de Colombia (Ley 51 de 1983).</p>
+      <label class="campo"><span>Fecha desde la que se cuenta (radicación, notificación, entrega…)</span><input type="date" id="fecha-desde"></label>
+      <div class="tramites" id="tramites"></div>
+    </div>
+    <div class="terminos__resultado">
+      <div class="calendario-hoja" id="hoja-calendario"></div>
+      <div class="meses" id="meses"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== DIRECTORIO ===================== -->
+<section class="vista" id="vista-directorio">
+  <p class="sobretitulo">Directorio de acceso a la justicia</p>
+  <h2 class="titulo-seccion">A dónde acudir, <em>gratis.</em></h2>
+  <div class="filtros" id="filtros-areas"></div>
+  <div class="directorio" id="directorio"></div>
+  <p class="aviso">Verifique direcciones y horarios en los canales oficiales de cada entidad.</p>
+</section>
+
+<!-- ===================== LABORATORIO ===================== -->
+<section class="vista" id="vista-laboratorio">
+  <p class="sobretitulo">Laboratorio del agente</p>
+  <h2 class="titulo-seccion">Cómo piensa <em>y qué tan bien responde.</em></h2>
+  <div class="lab">
+    <div class="tarjeta tarjeta--ancha">
+      <h3>Arquitectura</h3>
+      <div class="arquitectura" id="arquitectura"></div>
+    </div>
+    <div class="tarjeta">
+      <h3>Latencia promedio por etapa</h3>
+      <div id="lab-latencias" class="barras"></div>
+    </div>
+    <div class="tarjeta">
+      <h3>Consultas por área</h3>
+      <div id="lab-areas" class="barras"></div>
+    </div>
+    <div class="tarjeta tarjeta--ancha">
+      <div class="tarjeta__cab">
+        <h3>Evaluación con casos de prueba</h3>
+        <div>
+          <label class="check"><input type="checkbox" id="eval-llm"> incluir respuesta del LLM (lento)</label>
+          <button class="btn btn--sello" id="btn-evaluar">Ejecutar evaluación</button>
+        </div>
+      </div>
+      <div class="diales" id="diales"></div>
+      <div class="tabla-eval" id="tabla-eval"><p class="nota">Aún no hay evaluaciones. Ejecute una para ver las métricas.</p></div>
+    </div>
+    <div class="tarjeta tarjeta--ancha">
+      <h3>Base de conocimiento</h3>
+      <div id="lab-docs" class="docs-fuente"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===================== ARCHIVO ===================== -->
+<section class="vista" id="vista-archivo">
+  <p class="sobretitulo">Archivo</p>
+  <h2 class="titulo-seccion">Consultas <em>anteriores.</em></h2>
+  <div class="archivo" id="archivo"></div>
+</section>
+</main>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="/terminos.js"></script>
+<script src="/plantillas.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
