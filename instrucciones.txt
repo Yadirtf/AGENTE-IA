@@ -1,0 +1,45 @@
+UniPutumayo – Agentes de IA
+Diseño de Agentes conversacionales con PostgreSQL, pgvector, embedding gemma2, STT y TTS
+
+Propósito del documento. Organizar agentes de IA realistas y aplicables a distintos sectores para que los estudiantes integren conversación por texto y voz, una base de datos PostgreSQL para información transaccional y pgvector para búsqueda semántica sobre documentos, preguntas frecuentes y protocolos.
+Objetivo académico de aprendizaje
+Objetivo general. Diseñar e implementar prototipos funcionales de agentes conversacionales multimodales que integren modelos locales, reconocimiento de voz, síntesis de voz, base de datos relacional y recuperación semántica, aplicados a problemas reales de los sectores salud, educación, atención ciudadana, finanzas, ambiente, agro, turismo, gestión del riesgo, bienestar universitario, servicios públicos, empleo, comercio, justicia, cultura, inclusión, tecnología, transporte y talento humano.
+Resultados de aprendizaje esperados:
+• Modelar datos operativos en PostgreSQL pgvector y embedding gemma2 según el dominio del agente.
+• Implementar pgvector para consultar conocimiento en documentos, reglamentos, guías o historial de interacción.
+• Integrar STT para capturar la voz del usuario y TTS para responder de forma hablada.
+• Diseñar flujos conversacionales útiles, seguros y trazables para escenarios del mundo real.
+• Construir una interfaz básica web o de escritorio que permita interacción por texto y audio.
+• Evaluar la calidad de respuesta del agente con casos de prueba concretos.
+•
+Herramientas locales sugeridas
+Las siguientes herramientas son sugeridas y no obligatorias. Se seleccionan porque permiten construir prototipos locales o híbridos donde la universidad o los estudiantes controlan el flujo de datos y pueden experimentar con audio, texto y memoria conversacional.
+Componente
+Opción sugerida
+Uso en el proyecto
+LLM local
+Llama.cpp, Ollama con modelos abiertos o por API
+Permite ejecutar e invocar modelos locales por API; útil para el razonamiento del agente y la generación de respuestas.
+Modelos sugeridos
+Llama, Qwen, Gemma u otros compatibles con llama.cpp y Ollama
+Convenientes para pruebas comparativas según velocidad, memoria disponible y calidad de respuesta.
+STT
+Whisperx o faster-whisper
+Convierte audio a texto con buen rendimiento; adecuado para transcripción local y pruebas en tiempo real.
+TTS
+Qwen TTS o Microsoft Vibe voice o Piper o Kokoro
+Opciones locales de síntesis de voz para que el agente responda hablado.
+Backend
+Python con FastAPI o Flask
+Permite conectar el LLM, el STT, el TTS y la base de datos en una sola aplicación.
+Base de datos
+PostgreSQL + pgvector
+Separa datos transaccionales del conocimiento vectorial del agente.
+Consulta semántica
+Embedding gemma 2
+Para la creación de los embeddings y chunks a la base de datos.
+Interfaz
+HTML, CSS y JavaScript o una app en Python
+Facilita el chat por texto, grabación de audio y visualización del historial.
+
+Arquitectura mínima sugerida: audio del usuario → STT → gestor conversacional/LLM → consulta a PostgreSQL y pgvector → respuesta final → TTS → devolución por voz y texto.
