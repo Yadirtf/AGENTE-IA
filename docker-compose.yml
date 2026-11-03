@@ -1,0 +1,15 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: amparo-db
+    environment:
+      POSTGRES_USER: amparo
+      POSTGRES_PASSWORD: amparo
+      POSTGRES_DB: amparo
+    ports:
+      - "5433:5432"        # 5433 en su PC para no chocar con otro PostgreSQL
+    volumes:
+      - amparo-datos:/var/lib/postgresql/data
+    restart: unless-stopped
+volumes:
+  amparo-datos:
