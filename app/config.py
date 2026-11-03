@@ -39,6 +39,7 @@ RAG_UMBRAL = float(_env("RAG_UMBRAL", "0.30"))
 # --- Voz ---------------------------------------------------------------------
 WHISPER_MODELO = _env("WHISPER_MODELO", "small")      # tiny | base | small
 WHISPER_COMPUTE = _env("WHISPER_COMPUTE", "int8")      # ideal para CPU
+WHISPER_LLAMADA = _env("WHISPER_LLAMADA", "base")     # llamada en vivo: prioriza la rapidez
 _voz = Path(_env("PIPER_VOZ", "modelos/es_MX-claude-high.onnx"))
 PIPER_VOZ = str(_voz if _voz.is_absolute() else RAIZ / _voz)
 # Carpeta donde viven todas las voces de Piper (.onnx + .onnx.json); PIPER_VOZ es la voz por defecto.

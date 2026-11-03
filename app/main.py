@@ -41,7 +41,7 @@ def _cambiar_estado(cid, estado: str, nota: str | None = None) -> None:
 @app.get("/api/estado")
 async def estado():
     info = {"llm": await llm.estado(), "stt": voz.stt_disponible(), "tts": voz.tts_disponible(),
-            "whisper": config.WHISPER_MODELO, "db": False, "fragmentos": 0}
+            "whisper": config.WHISPER_MODELO, "whisper_llamada": config.WHISPER_LLAMADA, "db": False, "fragmentos": 0}
     try:
         fila = db.uno("SELECT (SELECT count(*) FROM fragmentos) AS f, (SELECT count(*) FROM documentos) AS d")
         info.update(db=True, fragmentos=fila["f"], documentos=fila["d"])
@@ -292,15 +292,153 @@ async def _respuesta_fija(cid, texto, canal, tipo, nombre, metricas, t_total):
 
 
 # ---------------------------------------------------------------------------
+# Llamada en vivo: turnos de voz con respuesta por frases (streaming)
+# ---------------------------------------------------------------------------
+class TurnoLlamada(BaseModel):
+    texto: str
+    conversacion_id: str | None = None
+    alias: str | None = None
+    ms_stt: int | None = None
+
+
+@app.post("/api/llamada")
+async def llamada(c: TurnoLlamada):
+    """Un turno de la llamada. Emite cada frase apenas está completa para que la voz empiece de inmediato.
+
+    Si la persona interrumpe, el navegador corta esta petición: lo dicho hasta ahí queda guardado
+    y marcado como interrumpido.
+    """
+    texto = c.texto.strip()
+    if not texto:
+        raise HTTPException(400, "El turno está vacío")
+    alias = (c.alias or "").strip()[:40] or None
+
+    async def flujo():
+        t0 = time.perf_counter()
+        metricas = {"stt": c.ms_stt}
+        cid, conv = c.conversacion_id, None
+        if cid:
+            conv = db.uno("SELECT id, area, alias, advertencias, bloqueada FROM conversaciones WHERE id=%s", (cid,))
+        if conv and conv["bloqueada"]:
+            yield _evento("colgar", {"motivo": "Esta llamada se cerró. Recargue la página para empezar de nuevo."})
+            return
+        if not conv:
+            conv = db.uno("INSERT INTO conversaciones (titulo, alias) VALUES (%s, %s) "
+                          "RETURNING id, area, alias, advertencias, bloqueada", ("📞 " + texto[:76], alias))
+            cid = str(conv["id"])
+            _cambiar_estado(cid, "abierto", "Llamada en vivo iniciada")
+        nombre = alias or conv["alias"]
+        yield _evento("conversacion", {"id": cid})
+        historial = db.consultar("SELECT rol, contenido FROM mensajes WHERE conversacion_id=%s "
+                                 "ORDER BY creado DESC LIMIT 6", (cid,))[::-1]
+        db.ejecutar("INSERT INTO mensajes (conversacion_id, rol, contenido, canal) VALUES (%s,'usuario',%s,'llamada')",
+                    (cid, texto))
+
+        dichas: list[dict] = []
+        estado = {"tipo": "llamada", "fuentes": [], "completa": False}
+
+        def guardar():
+            if not dichas:
+                return
+            contenido = " ".join(f["texto"] for f in dichas) + ("" if estado["completa"] else " (interrumpida)")
+            metricas["total"] = round((time.perf_counter() - t0) * 1000)
+            db.ejecutar("INSERT INTO mensajes (conversacion_id, rol, contenido, canal, fuentes, metricas, guion, tipo) "
+                        "VALUES (%s,'agente',%s,'llamada',%s,%s,%s,%s)",
+                        (cid, contenido, json.dumps(estado["fuentes"], ensure_ascii=False), json.dumps(metricas),
+                         json.dumps(dichas, ensure_ascii=False), estado["tipo"]))
+            db.ejecutar("UPDATE conversaciones SET actualizada=now() WHERE id=%s", (cid,))
+
+        try:
+            # 0) Seguridad y personalidad (instantáneo)
+            emergencia = orientacion.detectar_emergencia(texto)
+            if emergencia:
+                yield _evento("emergencia", emergencia)
+                frase = {"emocion": "seria", "texto": "Antes que nada: si está en peligro ahora, llame al uno, dos, tres. "
+                                                      "Hay ayuda gratuita las veinticuatro horas."}
+                dichas.append(frase)
+                yield _evento("frase", frase)
+            else:
+                tipo = None
+                if personalidad.detectar_ofensa(texto):
+                    avisos = (conv["advertencias"] or 0) + 1
+                    db.ejecutar("UPDATE conversaciones SET advertencias=%s WHERE id=%s", (avisos, cid))
+                    tipo = "aviso" if avisos < 2 else "cierre"
+                else:
+                    tipo = personalidad.detectar_identidad(texto) or ("fuera_tema" if personalidad.fuera_de_tema(texto) else None)
+                if tipo:
+                    estado["tipo"] = tipo
+                    for frase in personalidad.respuesta_fija(tipo, nombre)["guion"]:
+                        dichas.append(frase)
+                        yield _evento("frase", frase)
+                    estado["completa"] = True
+                    if tipo == "cierre":
+                        db.ejecutar("UPDATE conversaciones SET bloqueada=TRUE, motivo_cierre=%s WHERE id=%s",
+                                    ("Lenguaje ofensivo repetido", cid))
+                        _cambiar_estado(cid, "cerrado", "Llamada cerrada por lenguaje ofensivo repetido")
+                        yield _evento("colgar", {"motivo": "Amparo cerró la llamada. Para empezar de cero, recargue la página."})
+                    yield _evento("fin", {"metricas": metricas, "tipo": tipo})
+                    return
+
+            # 1) Recuperación breve (3 fragmentos) para responder con fundamento
+            previas = [m["contenido"] for m in historial if m["rol"] == "usuario"]
+            busqueda = (previas[-1] + " " + texto) if previas and len(texto.split()) < 10 else texto
+            t = time.perf_counter()
+            try:
+                vector = (await llm.embeber([busqueda]))[0]
+            except Exception as e:  # noqa: BLE001
+                yield _evento("error", {"mensaje": str(e) if isinstance(e, llm.ErrorOllama) else f"Sin embeddings: {e}"})
+                return
+            fragmentos = rag.buscar(vector, busqueda, k=3)
+            metricas["recuperacion"] = round((time.perf_counter() - t) * 1000)
+            estado["fuentes"] = [{k: f[k] for k in ("slug", "titulo", "seccion", "fuente", "similitud")} for f in fragmentos]
+            yield _evento("fuentes", estado["fuentes"])
+            clasif = orientacion.clasificar_area(rag.similitud_areas(vector), fragmentos, conv.get("area"))
+            if clasif["principal"] and not emergencia:
+                db.ejecutar("UPDATE conversaciones SET area=%s WHERE id=%s", (clasif["principal"]["slug"], cid))
+            elif emergencia:
+                db.ejecutar("UPDATE conversaciones SET area='violencia', urgencia='critica' WHERE id=%s", (cid,))
+
+            # 2) El LLM responde y cada frase sale apenas se completa
+            t = time.perf_counter()
+            cortador = personalidad.Frases()
+            try:
+                async for token in llm.chat_stream(personalidad.mensajes_llamada(texto, fragmentos, historial, nombre),
+                                                   max_tokens=160, temperatura=0.5):
+                    for frase in cortador.agregar(token):
+                        metricas.setdefault("primera_frase", round((time.perf_counter() - t) * 1000))
+                        dichas.append(frase)
+                        yield _evento("frase", frase)
+                for frase in cortador.terminar():
+                    metricas.setdefault("primera_frase", round((time.perf_counter() - t) * 1000))
+                    dichas.append(frase)
+                    yield _evento("frase", frase)
+            except Exception as e:  # noqa: BLE001
+                yield _evento("error", {"mensaje": f"El modelo '{config.LLM_MODELO}' no respondió: {e}"})
+                return
+            metricas["llm"] = round((time.perf_counter() - t) * 1000)
+            estado["completa"] = True
+            estado_caso = db.uno("SELECT estado FROM conversaciones WHERE id=%s", (cid,))
+            if estado_caso and estado_caso["estado"] == "abierto":
+                _cambiar_estado(cid, "orientado", "Orientación entregada en llamada en vivo")
+            yield _evento("fin", {"metricas": metricas, "tipo": "llamada"})
+        finally:
+            guardar()                       # también si la persona interrumpió (petición cancelada)
+
+    return StreamingResponse(flujo(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ---------------------------------------------------------------------------
 # Voz
 # ---------------------------------------------------------------------------
 @app.post("/api/stt")
-async def stt(audio: UploadFile = File(...)):
+async def stt(audio: UploadFile = File(...), rapido: bool = False):
     if not voz.stt_disponible():
         raise HTTPException(501, "faster-whisper no está instalado")
     datos = await audio.read()
+    modelo = config.WHISPER_LLAMADA if rapido else None      # la llamada en vivo prioriza la rapidez
     try:
-        return await asyncio.to_thread(voz.transcribir, datos)
+        return await asyncio.to_thread(voz.transcribir, datos, modelo)
     except Exception as e:  # noqa: BLE001
         print("Error en STT:", repr(e))
         raise HTTPException(500, f"No se pudo transcribir el audio: {e}") from e

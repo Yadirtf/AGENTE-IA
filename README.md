@@ -29,6 +29,7 @@ Todo corre **localmente en CPU**. Está pensado para un PC de **16 GB de RAM sin
 | **Límites del agente** | Detecta pedidos fuera de alcance (representarle, redactar demandas, predecir fallos, evadir la ley), los marca en la respuesta y remite al consultorio. Se evalúa con casos de prueba propios. |
 | **Personalidad propia** | Amparo es cálida y alegre: pregunta al inicio *cómo le gusta que le llamen* (solo un nombre o apodo) y saluda por ese nombre. Responde al instante, sin LLM, las preguntas sobre ella misma (*¿en qué me puedes ayudar?, ¿eres abogada?, ¿es gratis?, ¿guardas mis datos?, ¿de dónde sacas la información?*), los saludos y las despedidas. Si le preguntan algo que no es jurídico, lo dice con amabilidad y vuelve al tema. |
 | **Explica en voz, no lee** | La voz no lee el texto de la pantalla. Después de cada respuesta el LLM escribe un **guion hablado** de 3 a 5 frases cortas, como lo diría una persona, con una emoción por frase (*alegre, animada, cálida, tranquila, seria*). Piper ajusta el ritmo, la variación y el tono de cada frase, y la interfaz muestra la nota de voz con subtítulos que se resaltan mientras habla. |
+| **📞 Llamada en vivo** | Una pestaña para conversar con Amparo como en una llamada, sin tocar botones. El micrófono detecta solo cuándo empieza y termina usted de hablar (umbral que se adapta al ruido del cuarto y guarda ~350 ms previos para no cortar la primera sílaba). Whisper `base` transcribe el turno y `/api/llamada` responde **por frases**: la voz empieza con la primera frase mientras el LLM escribe la siguiente. Si tarda, Amparo dice *"Mmm, a ver…"* como una persona. **Si usted habla mientras ella habla, se calla al instante** (se corta el audio, la voz y la petición al LLM) y le escucha. Transcripción en vivo con las fuentes de cada respuesta, tiempos por turno, y al colgar un resumen con botón para agendar la cita. Todo queda en el historial. |
 | **Elegir la voz** | El botón **🎙 Voz** muestra las voces de Piper instaladas (México, Argentina y España, femeninas y masculinas) y las del navegador (en Edge, las voces «Natural» suenan muy humanas). Cada una tiene muestra, y se puede ajustar la velocidad. La elección queda guardada en el navegador. |
 | **Respeto y cierre de sesión** | Si insultan a Amparo, responde con amabilidad y pide respeto. Si se repite, cierra la charla: el chat queda bloqueado hasta recargar la página y la conversación queda en el historial como «cerrada». Si la persona cuenta que *otra persona* la insulta («mi pareja me dice inútil»), eso se trata como parte de su caso y no se corta. |
 | **Historial de charlas** | El botón **🗂** abre todas las charlas guardadas, agrupadas por día, con buscador por nombre o tema. Se pueden reabrir; las cerradas por ofensas se ven en modo lectura. |
@@ -101,6 +102,8 @@ Abra **http://localhost:8000**. El micrófono solo funciona en `localhost` o con
 | `Connection refused` en el puerto 11434 | Ollama no está abierto: inicie la aplicación Ollama o ejecute `ollama serve`. |
 | `couldn't get a connection` / puerto 5433 | La base de datos no está encendida: abra Docker Desktop y ejecute `docker compose up -d`. |
 | El micrófono no funciona | Abra la página como `http://localhost:8000` (no con la IP) y permita el micrófono en el navegador. |
+| En la llamada, Amparo se interrumpe sola | Su voz por los parlantes llega al micrófono. Use audífonos o baje el volumen; también puede pulsar *Espacio* para interrumpirla a mano. |
+| La llamada responde lento | Use `WHISPER_LLAMADA=tiny` en `.env`, cierre otros programas pesados o use la API (Groq) para el LLM. La primera llamada descarga Whisper `base` (~145 MB). |
 
 ### Evaluación
 
@@ -132,7 +135,7 @@ conocimiento/      17 documentos: Constitución (artículos clave), normas bási
 eval/casos.json    28 casos de prueba con área, fuente y límite esperados
 eval/personalidad.json  26 casos: preguntas sobre Amparo, temas no jurídicos y ofensas (y relatos que NO son ofensas)
 scripts/           ingestar.py · evaluar.py · descargar_voz.py
-web/               Interfaz: index.html · estilos.css · app.js · terminos.js · plantillas.js
+web/               Interfaz: index.html · estilos.css · app.js · llamada.js · terminos.js · plantillas.js
 ```
 
 ### Modelo de datos
@@ -161,6 +164,7 @@ web/               Interfaz: index.html · estilos.css · app.js · terminos.js 
 3. **Recuperación híbrida.** Se toman los 30 mejores por coseno en pgvector y los 30 mejores por `ts_rank` en español, y se fusionan con RRF (k=60).
 4. **Expediente.** El área se calcula por similitud con los embeddings de cada área más los votos de los fragmentos recuperados. Luego se asignan urgencia, ruta y entidades.
 5. **Generación.** El prompt obliga a usar solo las fuentes, citar `[n]`, no inventar artículos y seguir un formato fijo (*En pocas palabras · Lo que dice la norma · Qué puede hacer · A dónde acudir*).
+6. **Llamada en vivo.** En la pestaña Llamada el turno usa un prompt corto (2 a 4 frases, sin markdown), 3 fragmentos recortados y un prompt de sistema fijo para que Ollama reutilice su caché. Si la persona interrumpe, el navegador cancela la petición y lo que Amparo alcanzó a decir se guarda marcado como *(interrumpida)*.
 6. **Guion hablado.** Una segunda llamada corta al LLM (máx. 180 tokens) convierte la respuesta en lo que Amparo dirá en voz, con una emoción por frase. Si el LLM falla, se arma por reglas. Con `VOZ_GUION=reglas` en `.env` se omite esa llamada (más rápido en PCs lentos).
 6. **Remisión.** Al final de cada respuesta el sistema añade (sin depender del LLM) el recordatorio de que Amparo no reemplaza a un abogado y la opción de agendar cita con el consultorio jurídico.
 7. **Trazabilidad.** Todo se guarda en PostgreSQL con sus tiempos, y el caso pasa de «abierto» a «orientado».
@@ -177,6 +181,7 @@ web/               Interfaz: index.html · estilos.css · app.js · terminos.js 
 5. **Términos.** Calcule los 15 días hábiles de un derecho de petición y muestre que el calendario salta los festivos.
 6. **Seguridad.** Escriba *"mi pareja me pega"* y muestre la franja de emergencia.
 7. **Límites y remisión.** Pregunte *"¿usted me puede representar en la audiencia?"*: aparece el aviso de límite. Pulse **Agendar cita con el consultorio jurídico**, elija día y hora y muestre la constancia. En **Casos**, el expediente ya está en «Remitido»; arrástrelo a «En trámite».
+8. **📞 Llamada en vivo.** Abra la pestaña **Llamada**, toque el teléfono verde y converse sin tocar nada. Mientras Amparo explica, interrúmpala con *"espere, ¿y si no me responden?"*: se calla y le responde a la nueva pregunta. Cuelgue y muestre el resumen.
 8. **Respeto.** Escriba *"eres una inútil"* (aviso amable) y luego *"bot estúpido"* (cierre de la sesión). Recargue la página y abra el **🗂 historial**: la charla aparece como «cerrada».
 8. **Laboratorio.** Ejecute la evaluación y explique Hit@k, MRR, la exactitud por área y el dial de **Personalidad**.
 
