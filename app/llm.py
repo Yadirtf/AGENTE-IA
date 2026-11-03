@@ -23,10 +23,43 @@ async def embeber(textos: list[str], tipo: str = "consulta", titulo: str = "none
     else:
         entradas = [PREFIJO_DOCUMENTO.format(titulo=titulo) + t for t in textos]
     async with httpx.AsyncClient(timeout=_timeout) as cli:
-        r = await cli.post(f"{config.OLLAMA_URL}/api/embed",
-                           json={"model": config.EMBED_MODELO, "input": entradas, "keep_alive": "60m"})
-        r.raise_for_status()
+        try:
+            r = await cli.post(f"{config.OLLAMA_URL}/api/embed",
+                               json={"model": config.EMBED_MODELO, "input": entradas, "keep_alive": "60m"})
+        except httpx.ConnectError as e:
+            raise ErrorOllama(f"No hay conexión con Ollama en {config.OLLAMA_URL}. "
+                              "Abra la aplicación Ollama (o ejecute 'ollama serve') y vuelva a intentarlo.") from e
+        if r.status_code == 404:
+            detalle = _detalle(r)
+            if "not found" in detalle.lower() and "model" in detalle.lower():
+                raise ErrorOllama(f"Ollama no tiene el modelo '{config.EMBED_MODELO}'. "
+                                  f"Ejecute:  ollama pull {config.EMBED_MODELO}   (y verifique con: ollama list)")
+            # Ollama antiguo sin /api/embed: se intenta el endpoint anterior, uno por uno
+            vectores = []
+            for t in entradas:
+                r2 = await cli.post(f"{config.OLLAMA_URL}/api/embeddings",
+                                    json={"model": config.EMBED_MODELO, "prompt": t})
+                if r2.status_code != 200:
+                    raise ErrorOllama(
+                        f"Ollama respondió {r2.status_code}: {_detalle(r2)}. Su versión de Ollama parece antigua: "
+                        f"EmbeddingGemma requiere Ollama 0.11.10 o superior. Actualícelo desde https://ollama.com/download "
+                        f"y ejecute: ollama pull {config.EMBED_MODELO}")
+                vectores.append(r2.json()["embedding"])
+            return vectores
+        if r.status_code != 200:
+            raise ErrorOllama(f"Ollama respondió {r.status_code} al generar embeddings: {_detalle(r)}")
         return r.json()["embeddings"]
+
+
+class ErrorOllama(RuntimeError):
+    """Error de Ollama con un mensaje claro para el usuario."""
+
+
+def _detalle(r: httpx.Response) -> str:
+    try:
+        return r.json().get("error", r.text)
+    except Exception:  # noqa: BLE001
+        return r.text[:300]
 
 
 async def chat_stream(mensajes: list[dict]) -> AsyncIterator[str]:

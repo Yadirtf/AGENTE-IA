@@ -139,7 +139,9 @@ async def consulta(c: Consulta):
         try:
             vector = (await llm.embeber([texto_busqueda]))[0]
         except Exception as e:  # noqa: BLE001
-            yield _evento("error", {"mensaje": f"No pude generar el embedding. ¿Está Ollama encendido con '{config.EMBED_MODELO}'? ({e})"})
+            mensaje = str(e) if isinstance(e, llm.ErrorOllama) else \
+                f"No pude generar el embedding. ¿Está Ollama encendido con '{config.EMBED_MODELO}'? ({e})"
+            yield _evento("error", {"mensaje": mensaje})
             return
         metricas["embedding"] = round((time.perf_counter() - t) * 1000)
         yield _evento("etapa", {"etapa": "embedding", "estado": "fin", "ms": metricas["embedding"], "dim": len(vector)})

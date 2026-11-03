@@ -52,7 +52,7 @@ Alternativas:
 
 ## Instalación (Windows, macOS o Linux)
 
-Requisitos: **Python 3.11+**, **Docker Desktop** y **[Ollama](https://ollama.com/download)**.
+Requisitos: **Python 3.11+**, **Docker Desktop** y **[Ollama](https://ollama.com/download) 0.11.10 o superior** (EmbeddingGemma no funciona en versiones anteriores; compruebe con `ollama --version`).
 
 ```bash
 # 1. Base de datos PostgreSQL + pgvector
@@ -71,16 +71,28 @@ copy .env.example .env          # macOS/Linux: cp .env.example .env
 # 4. Voz en español para Piper (~110 MB)
 python -m scripts.descargar_voz
 
-# 5. Cargar la base de conocimiento (esquema + catálogos + embeddings)
+# 5. Verificar que todo está listo (Ollama, modelos, PostgreSQL, voz)
+python -m scripts.diagnostico
+
+# 6. Cargar la base de conocimiento (esquema + catálogos + embeddings)
 python -m scripts.ingestar
 
-# 6. Ejecutar
+# 7. Ejecutar
 uvicorn app.main:app --port 8000
 ```
 
 Abra **http://localhost:8000**. El micrófono solo funciona en `localhost` o con HTTPS. En Windows, después de la primera instalación basta con ejecutar `iniciar.bat`.
 
 > La primera vez que use el micrófono, faster-whisper descargará el modelo `small` (~460 MB). Si Piper no está disponible, la interfaz usa automáticamente la voz del navegador. Si Whisper no está disponible, usa el dictado del navegador.
+
+### Problemas frecuentes
+
+| Error | Solución |
+|---|---|
+| `404 Not Found` en `/api/embed` | Falta el modelo de embeddings: `ollama pull embeddinggemma` y compruebe con `ollama list`. Si ya está, actualice Ollama a 0.11.10 o superior. |
+| `Connection refused` en el puerto 11434 | Ollama no está abierto: inicie la aplicación Ollama o ejecute `ollama serve`. |
+| `couldn't get a connection` / puerto 5433 | La base de datos no está encendida: abra Docker Desktop y ejecute `docker compose up -d`. |
+| El micrófono no funciona | Abra la página como `http://localhost:8000` (no con la IP) y permita el micrófono en el navegador. |
 
 ### Evaluación
 

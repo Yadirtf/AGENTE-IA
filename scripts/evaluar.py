@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app import db, evaluacion  # noqa: E402
+from app import db, evaluacion, llm  # noqa: E402
 
 
 async def main():
@@ -25,5 +25,8 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except llm.ErrorOllama as e:
+        print(f"\n✗ {e}")
+        sys.exit(1)
     finally:
         db.cerrar()

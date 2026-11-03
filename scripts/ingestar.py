@@ -92,5 +92,8 @@ async def main():
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except llm.ErrorOllama as e:
+        print(f"\n✗ {e}")
+        sys.exit(1)
     finally:
         db.cerrar()
