@@ -15,7 +15,6 @@ from . import config
 
 _lock = threading.Lock()
 _whisper = None
-_piper = None
 
 
 def stt_disponible() -> bool:
@@ -24,14 +23,6 @@ def stt_disponible() -> bool:
         return True
     except ImportError:
         return False
-
-
-def tts_disponible() -> bool:
-    try:
-        import piper  # noqa: F401
-    except ImportError:
-        return False
-    return Path(config.PIPER_VOZ).exists()
 
 
 def _modelo_whisper():
@@ -80,29 +71,170 @@ def transcribir(audio: bytes) -> dict:
             "ms": round((time.perf_counter() - t0) * 1000)}
 
 
-def _voz_piper():
-    global _piper
+# ---------------------------------------------------------------------------
+# TTS: varias voces de Piper y prosodia por emoción
+# ---------------------------------------------------------------------------
+# Voces en español de rhasspy/piper-voices que funcionan bien en CPU.
+CATALOGO = {
+    "es_MX-claude-high": {"nombre": "Claude", "acento": "México", "genero": "femenina", "calidad": "alta", "mb": 114,
+                          "desc": "Clara y cercana (por defecto)"},
+    "es_AR-daniela-high": {"nombre": "Daniela", "acento": "Argentina", "genero": "femenina", "calidad": "alta", "mb": 114,
+                           "desc": "Cálida y expresiva"},
+    "es_MX-ald-medium": {"nombre": "Ald", "acento": "México", "genero": "masculina", "calidad": "media", "mb": 63,
+                         "desc": "Serena y amable"},
+    "es_ES-davefx-medium": {"nombre": "Dave", "acento": "España", "genero": "masculina", "calidad": "media", "mb": 63,
+                            "desc": "Firme y clara"},
+    "es_ES-sharvard-medium": {"nombre": "Sharvard", "acento": "España", "genero": "femenina y masculina", "calidad": "media",
+                              "mb": 77, "desc": "Dos voces en un mismo modelo"},
+    "es_ES-carlfm-x_low": {"nombre": "Carlos", "acento": "España", "genero": "masculina", "calidad": "ligera", "mb": 28,
+                           "desc": "Muy liviana, ideal para PCs lentos"},
+}
+_HABLANTE = {"F": ("femenina", "voz femenina"), "M": ("masculina", "voz masculina")}
+
+# Piper no tiene "emociones", pero sí controla ritmo (length_scale) y variación (noise).
+# El tono se sube o baja remuestreando el audio de cada frase. Con eso, y con pausas
+# distintas entre frases, la voz deja de sonar plana.
+PROSODIA = {
+    #             ritmo  variación  duración-fonema  tono   volumen  pausa(ms)
+    "alegre":    (0.93,  0.78,      0.95,            1.06,  1.00,    260),
+    "animada":   (0.95,  0.74,      0.90,            1.04,  1.00,    240),
+    "calida":    (1.06,  0.66,      0.85,            1.01,  0.94,    330),
+    "tranquila": (1.08,  0.60,      0.80,            0.99,  0.92,    360),
+    "seria":     (1.04,  0.50,      0.70,            0.96,  1.00,    420),
+}
+
+_voces: dict = {}
+
+
+def voces_instaladas() -> list[dict]:
+    """Voces presentes en la carpeta modelos/, con sus hablantes si el modelo tiene varios."""
+    import json
+    lista = []
+    defecto = Path(config.PIPER_VOZ).stem
+    for onnx in sorted(config.MODELOS.glob("*.onnx")):
+        js = onnx.with_suffix(".onnx.json")
+        if not js.exists():
+            continue
+        try:
+            meta = json.loads(js.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        base = {"id": onnx.stem, "nombre": onnx.stem.split("-")[1].capitalize(), "acento": "", "genero": "",
+                "calidad": onnx.stem.split("-")[-1], "desc": "", **CATALOGO.get(onnx.stem, {})}
+        base["defecto"] = onnx.stem == defecto
+        hablantes = meta.get("speaker_id_map") or {}
+        if len(hablantes) > 1:
+            for clave in hablantes:
+                genero, desc = _HABLANTE.get(clave.upper(), ("", f"hablante {clave}"))
+                lista.append({**base, "id": f"{onnx.stem}#{clave}", "nombre": f"{base['nombre']} {clave}",
+                              "genero": genero or base["genero"], "desc": desc, "defecto": False})
+        else:
+            lista.append(base)
+    lista.sort(key=lambda v: (not v["defecto"], v["id"]))
+    return lista
+
+
+def catalogo() -> list[dict]:
+    instaladas = {v["id"].split("#")[0] for v in voces_instaladas()}
+    return [{"id": k, **v, "instalada": k in instaladas} for k, v in CATALOGO.items()]
+
+
+def _resolver(voz_id: str | None) -> tuple[Path, str | None]:
+    modelo, _, hablante = (voz_id or "").partition("#")
+    if modelo and re.fullmatch(r"[\w\-]+", modelo):
+        ruta = config.MODELOS / f"{modelo}.onnx"
+        if ruta.exists():
+            return ruta, hablante or None
+    return Path(config.PIPER_VOZ), None
+
+
+def _voz_piper(ruta: Path):
+    from piper import PiperVoice
+    clave = str(ruta)
     with _lock:
-        if _piper is None:
-            from piper import PiperVoice
-            _piper = PiperVoice.load(config.PIPER_VOZ)
-    return _piper
+        if clave not in _voces:
+            if len(_voces) >= 3:                       # cada voz ocupa 60-120 MB: se guardan 3 como máximo
+                _voces.pop(next(iter(_voces)))
+            _voces[clave] = PiperVoice.load(clave)
+    return _voces[clave]
 
 
 def limpiar_para_voz(texto: str) -> str:
     t = re.sub(r"\[\d+\]", "", texto)              # citas
     t = re.sub(r"[*_#`>]", "", t)                   # markdown
     t = re.sub(r"^\s*[-•]\s*", "", t, flags=re.M)
-    t = t.replace("art.", "artículo").replace("Art.", "Artículo")
+    t = re.sub(r"[\U0001F000-\U0001FFFF☀-➿️]", "", t)   # emojis
+    t = t.replace("art.", "artículo").replace("Art.", "Artículo").replace("C.C.", "cédula")
+    t = re.sub(r"\s+([.,;:!?])", r"\1", t)
     return re.sub(r"\s+", " ", t).strip()
 
 
-def sintetizar(texto: str) -> bytes:
-    voz = _voz_piper()
+def _frase_pcm(voz, texto: str, emocion: str, velocidad: float, hablante: str | None):
+    """Sintetiza una frase con la prosodia de su emoción. Devuelve (muestras int16, frecuencia)."""
+    import numpy as np
+
+    ritmo, ruido, ruido_w, tono, volumen, _ = PROSODIA.get(emocion, PROSODIA["tranquila"])
+    cfg_voz = getattr(voz, "config", None)
+    base = getattr(cfg_voz, "length_scale", 1.0) or 1.0
+    # Se alarga primero en el factor de tono; al remuestrear para subir el tono vuelve a la duración deseada.
+    largo = base * ritmo * tono / max(0.6, min(1.6, velocidad))
+    sid = None
+    if hablante is not None:
+        mapa = getattr(cfg_voz, "speaker_id_map", None) or {}
+        sid = mapa.get(hablante, int(hablante) if str(hablante).isdigit() else None)
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav:
-        if hasattr(voz, "synthesize_wav"):          # piper-tts >= 1.3
-            voz.synthesize_wav(limpiar_para_voz(texto), wav)
-        else:                                       # piper-tts 1.2
-            voz.synthesize(limpiar_para_voz(texto), wav)
-    return buf.getvalue()
+        if hasattr(voz, "synthesize_wav"):                         # piper-tts >= 1.3
+            from piper import SynthesisConfig
+            voz.synthesize_wav(texto, wav, syn_config=SynthesisConfig(
+                speaker_id=sid, length_scale=largo, noise_scale=ruido, noise_w_scale=ruido_w, volume=volumen))
+        else:                                                      # piper-tts 1.2
+            voz.synthesize(texto, wav, speaker_id=sid, length_scale=largo, noise_scale=ruido, noise_w=ruido_w)
+    buf.seek(0)
+    with wave.open(buf, "rb") as w:
+        sr = w.getframerate()
+        pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32)
+    if abs(tono - 1) > 0.005 and pcm.size:
+        n = int(pcm.size / tono)
+        pcm = np.interp(np.linspace(0, pcm.size - 1, n), np.arange(pcm.size), pcm)
+    if not hasattr(voz, "synthesize_wav"):
+        pcm *= volumen
+    rampa = min(240, pcm.size // 4)                                # evita "clics" entre frases
+    if rampa:
+        pcm[:rampa] *= np.linspace(0, 1, rampa)
+        pcm[-rampa:] *= np.linspace(1, 0, rampa)
+    return np.clip(pcm, -32768, 32767).astype(np.int16), sr
+
+
+def sintetizar_segmentos(segmentos: list[dict], voz_id: str | None = None, velocidad: float = 1.0) -> tuple[bytes, list[int]]:
+    """Une las frases con pausas naturales. Devuelve el WAV y la duración de cada frase (ms) para los subtítulos."""
+    import numpy as np
+
+    ruta, hablante = _resolver(voz_id)
+    voz = _voz_piper(ruta)
+    partes, duraciones, sr = [], [], 22050
+    for s in segmentos:
+        texto = limpiar_para_voz(s.get("texto", ""))
+        if not texto:
+            continue
+        pcm, sr = _frase_pcm(voz, texto, s.get("emocion", "tranquila"), velocidad, hablante)
+        pausa = np.zeros(int(sr * PROSODIA.get(s.get("emocion"), PROSODIA["tranquila"])[5] / 1000), dtype=np.int16)
+        partes += [pcm, pausa]
+        duraciones.append(round((pcm.size + pausa.size) / sr * 1000))
+    audio = np.concatenate(partes) if partes else np.zeros(0, dtype=np.int16)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sr)
+        wav.writeframes(audio.tobytes())
+    return buf.getvalue(), duraciones
+
+
+def tts_disponible() -> bool:
+    """Basta con que Piper esté instalado y haya al menos una voz en modelos/."""
+    try:
+        import piper  # noqa: F401
+    except ImportError:
+        return False
+    return Path(config.PIPER_VOZ).exists() or bool(voces_instaladas())

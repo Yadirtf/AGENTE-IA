@@ -41,3 +41,7 @@ WHISPER_MODELO = _env("WHISPER_MODELO", "small")      # tiny | base | small
 WHISPER_COMPUTE = _env("WHISPER_COMPUTE", "int8")      # ideal para CPU
 _voz = Path(_env("PIPER_VOZ", "modelos/es_MX-claude-high.onnx"))
 PIPER_VOZ = str(_voz if _voz.is_absolute() else RAIZ / _voz)
+# Carpeta donde viven todas las voces de Piper (.onnx + .onnx.json); PIPER_VOZ es la voz por defecto.
+MODELOS = Path(PIPER_VOZ).parent
+# Guion hablado: "llm" (Amparo explica con sus palabras y emoción) o "reglas" (más rápido, sin segunda llamada al LLM)
+VOZ_GUION = _env("VOZ_GUION", "llm")

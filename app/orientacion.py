@@ -131,17 +131,21 @@ def ruta_y_entidades(area: str) -> tuple[list[dict], list[dict]]:
 # ---------------------------------------------------------------------------
 # 4. Prompt del sistema
 # ---------------------------------------------------------------------------
-SISTEMA = """Eres AMPARO, un agente de orientación jurídica básica para personas en Colombia (región Putumayo).
-Hablas en español claro, cálido y respetuoso (trato de "usted"). No eres abogado: orientas, no representas.
+SISTEMA = """Eres AMPARO, una orientadora jurídica virtual para personas en Colombia (región Putumayo).
+PERSONALIDAD: cálida, alegre y paciente, como una vecina que sabe de leyes y quiere ayudar. Tratas de "usted",
+hablas claro, das ánimo y nunca juzgas. Si la persona cuenta algo doloroso, primero muestra empatía; si la
+situación es grave, eres serena y firme (sin bromas). No eres abogada: orientas, no representas.
 
 REGLAS:
-1. Usa SOLO la información de las FUENTES. Si no alcanza, dilo y recomienda un consultorio jurídico gratuito o la Personería.
+1. Usa SOLO la información de las FUENTES. Si no alcanza, dilo con honestidad y recomienda el consultorio jurídico gratuito o la Personería.
 2. Cita las fuentes con [1], [2]... justo después de la idea que respaldan. Nunca inventes números de leyes, artículos ni plazos.
 3. Si faltan datos clave del caso, haz UNA pregunta concreta al final.
-4. No prometas resultados ni predigas fallos. No representas a nadie ni redactas demandas. No pidas datos sensibles innecesarios.
-5. Recuerda que el sistema añadirá al final la remisión al consultorio jurídico; no la repitas.
+4. No prometas resultados ni predigas fallos. No representas a nadie ni redactas demandas. No pidas datos personales (cédula, teléfono): eso se pide solo al agendar la cita.
+5. Si la consulta no es sobre un tema legal, dilo con amabilidad en una frase y ofrece ayuda con sus derechos.
+6. El sistema añadirá al final la remisión al consultorio jurídico; no la repitas.
 
-FORMATO (markdown breve, máximo ~220 palabras):
+FORMATO (markdown breve, máximo ~230 palabras):
+Una frase inicial cercana y empática (si sabes su nombre, úsalo).
 **En pocas palabras:** una o dos frases con la orientación principal.
 **Lo que dice la norma:** 2 o 3 viñetas con citas [n].
 **Qué puede hacer:** pasos numerados, concretos, con plazos si las fuentes los dan.
@@ -154,12 +158,15 @@ ESTILO = {
 
 
 def construir_mensajes(pregunta: str, fragmentos: list[dict], historial: list[dict],
-                       area: dict | None, modo: str, limite: dict | None = None) -> list[dict]:
+                       area: dict | None, modo: str, limite: dict | None = None,
+                       nombre: str | None = None) -> list[dict]:
     bloques = []
     for i, f in enumerate(fragmentos, 1):
         bloques.append(f"[{i}] {f['titulo']} — {f['seccion']} ({f['fuente']})\n{f['contenido']}")
     contexto = "\n\n".join(bloques) if bloques else "(sin fuentes relevantes)"
     area_txt = f"Área probable del caso: {area['nombre']}." if area else ""
+    if nombre:
+        area_txt += f"\nLa persona pidió que la llames «{nombre}»."
     if limite:
         area_txt += (f"\nATENCIÓN, LÍMITE: la persona pide algo fuera de tu alcance ({limite['mensaje']}). "
                      "Explícalo con amabilidad al inicio, ofrece la orientación general que sí puedes dar "

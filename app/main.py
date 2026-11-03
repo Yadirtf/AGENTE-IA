@@ -5,6 +5,7 @@ Flujo de una consulta (arquitectura sugerida por el curso):
 """
 import asyncio
 import json
+import re
 import time
 import uuid
 
@@ -13,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, evaluacion, llm, orientacion, rag, voz
+from . import config, db, evaluacion, llm, orientacion, personalidad, rag, voz
 
 app = FastAPI(title="Amparo · Orientación jurídica básica")
 WEB = config.RAIZ / "web"
@@ -55,7 +56,8 @@ async def estado():
 @app.get("/api/conversaciones")
 def listar_conversaciones():
     filas = db.consultar(
-        "SELECT c.id, c.titulo, c.urgencia, c.estado, c.notas, c.actualizada, c.area AS area_slug, "
+        "SELECT c.id, c.titulo, c.urgencia, c.estado, c.notas, c.actualizada, c.creada, c.area AS area_slug, "
+        "c.alias, c.bloqueada, c.motivo_cierre, c.advertencias, "
         "a.nombre AS area, a.color, a.simbolo, p.id AS consultante_id, p.nombre AS consultante, "
         "(SELECT count(*) FROM mensajes m WHERE m.conversacion_id=c.id) AS mensajes, "
         "(SELECT count(*) FROM documentos_generados d WHERE d.conversacion_id=c.id) AS documentos, "
@@ -66,12 +68,13 @@ def listar_conversaciones():
     for f in filas:
         f["id"] = str(f["id"])
         f["actualizada"] = f["actualizada"].isoformat()
+        f["creada"] = f["creada"].isoformat()
     return filas
 
 
 @app.get("/api/conversaciones/{cid}")
 def ver_conversacion(cid: uuid.UUID):
-    msgs = db.consultar("SELECT id, rol, contenido, canal, fuentes, expediente, metricas, creado "
+    msgs = db.consultar("SELECT id, rol, contenido, canal, fuentes, expediente, metricas, guion, tipo, creado "
                         "FROM mensajes WHERE conversacion_id=%s ORDER BY creado", (cid,))
     for m in msgs:
         m["creado"] = m["creado"].isoformat()
@@ -94,6 +97,8 @@ class Consulta(BaseModel):
     canal: str = "texto"
     ms_stt: int | None = None
     consultante_id: int | None = None
+    alias: str | None = None          # nombre o apodo con el que quiere que Amparo le llame
+    voz: bool = True                  # si la interfaz va a hablar: genera la explicación hablada con el LLM
 
 
 def _evento(tipo: str, datos) -> bytes:
@@ -110,15 +115,23 @@ async def consulta(c: Consulta):
         metricas = {"stt": c.ms_stt}
         t_total = time.perf_counter()
         cid = c.conversacion_id
+        alias = (c.alias or "").strip()[:40] or None
+        conv = None
         if cid:
-            conv = db.uno("SELECT id, area FROM conversaciones WHERE id=%s", (cid,))
+            conv = db.uno("SELECT id, area, alias, advertencias, bloqueada FROM conversaciones WHERE id=%s", (cid,))
             if not conv:
                 cid = None
+        if conv and conv["bloqueada"]:
+            yield _evento("sesion_cerrada", {"motivo": "Esta charla se cerró. Para empezar de cero, recargue la página."})
+            return
         if not cid:
-            conv = db.uno("INSERT INTO conversaciones (titulo, consultante_id) VALUES (%s, %s) RETURNING id, area",
-                          (texto[:80], c.consultante_id))
+            conv = db.uno("INSERT INTO conversaciones (titulo, consultante_id, alias) VALUES (%s, %s, %s) "
+                          "RETURNING id, area, alias, advertencias, bloqueada", (texto[:80], c.consultante_id, alias))
             cid = str(conv["id"])
             _cambiar_estado(cid, "abierto", "Caso creado")
+        elif alias and alias != conv["alias"]:
+            db.ejecutar("UPDATE conversaciones SET alias=%s WHERE id=%s", (alias, cid))
+        nombre = alias or conv["alias"]
         yield _evento("conversacion", {"id": cid})
         historial = db.consultar("SELECT rol, contenido FROM mensajes WHERE conversacion_id=%s "
                                  "ORDER BY creado DESC LIMIT 6", (cid,))[::-1]
@@ -127,6 +140,21 @@ async def consulta(c: Consulta):
         emergencia = orientacion.detectar_emergencia(texto)
         if emergencia:
             yield _evento("emergencia", emergencia)
+
+        # 0b) Personalidad: ofensas, preguntas sobre Amparo y temas no jurídicos (respuestas al instante, sin LLM)
+        if not emergencia:
+            tipo = None
+            if personalidad.detectar_ofensa(texto):
+                avisos = (conv["advertencias"] or 0) + 1
+                db.ejecutar("UPDATE conversaciones SET advertencias=%s WHERE id=%s", (avisos, cid))
+                tipo = "aviso" if avisos < 2 else "cierre"
+            else:
+                tipo = personalidad.detectar_identidad(texto) or ("fuera_tema" if personalidad.fuera_de_tema(texto) else None)
+            if tipo:
+                async for ev in _respuesta_fija(cid, texto, c.canal, tipo, nombre, metricas, t_total):
+                    yield ev
+                return
+
         limite = orientacion.detectar_limite(texto)
         if limite:
             yield _evento("limite", limite)
@@ -174,7 +202,7 @@ async def consulta(c: Consulta):
 
         # 4) Generación con el LLM (streaming)
         yield _evento("etapa", {"etapa": "llm", "estado": "inicio", "modelo": config.LLM_MODELO})
-        mensajes = orientacion.construir_mensajes(texto, utiles, historial, area, c.modo, limite)
+        mensajes = orientacion.construir_mensajes(texto, utiles, historial, area, c.modo, limite, nombre)
         t = time.perf_counter()
         primero, partes = None, []
         try:
@@ -198,15 +226,39 @@ async def consulta(c: Consulta):
         expediente["remision"] = orientacion.remision(con_citas, limite)
         yield _evento("remision", expediente["remision"])
 
+        # 4b) Explicación hablada: lo que Amparo DICE en voz, corto y con emoción (no lee el texto completo)
+        yield _evento("etapa", {"etapa": "guion", "estado": "inicio"})
+        t = time.perf_counter()
+        guion, origen = None, "reglas"
+        if c.voz and config.VOZ_GUION == "llm":
+            try:
+                crudo = await asyncio.wait_for(llm.completar(
+                    personalidad.mensajes_guion(texto, respuesta, nombre, urgencia["nivel"]),
+                    max_tokens=180, temperatura=0.6), timeout=60)
+                guion = personalidad.parsear_guion(crudo)
+                origen = "llm"
+            except Exception as e:  # noqa: BLE001
+                print("Aviso: no se pudo generar el guion hablado:", repr(e))
+        if not guion or len(guion) < 2:
+            guion, origen = personalidad.guion_por_reglas(respuesta, nombre, urgencia["nivel"]), "reglas"
+        if emergencia:
+            guion.insert(0, {"emocion": "seria", "texto": "Antes que nada: si está en peligro ahora, llame al uno, dos, tres."})
+        metricas["guion"] = round((time.perf_counter() - t) * 1000)
+        yield _evento("etapa", {"etapa": "guion", "estado": "fin", "ms": metricas["guion"]})
+        yield _evento("guion", {"segmentos": guion, "origen": origen})
+
         # 5) Persistencia y trazabilidad
         metricas["total"] = round((time.perf_counter() - t_total) * 1000)
         fuentes_min = [{k: f[k] for k in ("id", "slug", "titulo", "seccion", "fuente", "similitud", "contenido")} for f in utiles]
+        # Si la charla empezó con un saludo o una pregunta sobre Amparo, el título pasa a ser la primera consulta real
+        db.ejecutar("UPDATE conversaciones SET titulo=%s WHERE id=%s AND NOT EXISTS "
+                    "(SELECT 1 FROM mensajes WHERE conversacion_id=%s AND rol='agente' AND tipo='orientacion')", (texto[:80], cid, cid))
         db.ejecutar("INSERT INTO mensajes (conversacion_id, rol, contenido, canal) VALUES (%s,'usuario',%s,%s)",
                     (cid, texto, c.canal))
-        fila = db.uno("INSERT INTO mensajes (conversacion_id, rol, contenido, fuentes, expediente, metricas) "
-                      "VALUES (%s,'agente',%s,%s,%s,%s) RETURNING id",
+        fila = db.uno("INSERT INTO mensajes (conversacion_id, rol, contenido, fuentes, expediente, metricas, guion, tipo) "
+                      "VALUES (%s,'agente',%s,%s,%s,%s,%s,'orientacion') RETURNING id",
                       (cid, respuesta, json.dumps(fuentes_min), json.dumps(expediente, default=str),
-                       json.dumps(metricas)))
+                       json.dumps(metricas), json.dumps(guion, ensure_ascii=False)))
         estado = db.uno("UPDATE conversaciones SET area=%s, urgencia=%s, actualizada=now() WHERE id=%s RETURNING estado",
                         (area["slug"] if area else None, urgencia["nivel"], cid))
         if estado and estado["estado"] == "abierto":
@@ -215,6 +267,28 @@ async def consulta(c: Consulta):
 
     return StreamingResponse(flujo(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+async def _respuesta_fija(cid, texto, canal, tipo, nombre, metricas, t_total):
+    """Respuestas de personalidad: quién es Amparo, saludos, temas no jurídicos, avisos y cierre de sesión."""
+    r = personalidad.respuesta_fija(tipo, nombre)
+    yield _evento("tipo_respuesta", {"tipo": tipo})
+    for palabra in re.split(r"(?<=\s)", r["texto"]):          # efecto de escritura natural
+        yield _evento("token", palabra)
+        await asyncio.sleep(0.008)
+    yield _evento("guion", {"segmentos": r["guion"], "origen": "personalidad"})
+    metricas["total"] = round((time.perf_counter() - t_total) * 1000)
+    db.ejecutar("INSERT INTO mensajes (conversacion_id, rol, contenido, canal) VALUES (%s,'usuario',%s,%s)", (cid, texto, canal))
+    fila = db.uno("INSERT INTO mensajes (conversacion_id, rol, contenido, metricas, guion, tipo) "
+                  "VALUES (%s,'agente',%s,%s,%s,%s) RETURNING id",
+                  (cid, r["texto"], json.dumps(metricas), json.dumps(r["guion"], ensure_ascii=False), tipo))
+    db.ejecutar("UPDATE conversaciones SET actualizada=now() WHERE id=%s", (cid,))
+    if tipo == "cierre":
+        db.ejecutar("UPDATE conversaciones SET bloqueada=TRUE, motivo_cierre=%s WHERE id=%s",
+                    ("Lenguaje ofensivo repetido", cid))
+        _cambiar_estado(cid, "cerrado", "Sesión cerrada por lenguaje ofensivo repetido")
+        yield _evento("sesion_cerrada", {"motivo": "Para empezar de cero, recargue la página."})
+    yield _evento("fin", {"mensaje_id": fila["id"], "metricas": metricas, "tipo": tipo})
 
 
 # ---------------------------------------------------------------------------
@@ -233,17 +307,37 @@ async def stt(audio: UploadFile = File(...)):
 
 
 class TextoVoz(BaseModel):
-    texto: str
+    texto: str | None = None                 # texto libre: se divide en frases con emoción inferida
+    segmentos: list[dict] | None = None      # guion hablado [{emocion, texto}]
+    voz: str | None = None                   # id de la voz Piper (p. ej. es_AR-daniela-high o es_ES-sharvard-medium#F)
+    velocidad: float = 1.0
+
+
+@app.get("/api/voces")
+def voces():
+    return {"disponible": voz.tts_disponible(), "instaladas": voz.voces_instaladas() if voz.tts_disponible() else [],
+            "catalogo": voz.catalogo(), "emociones": list(voz.PROSODIA)}
 
 
 @app.post("/api/tts")
 async def tts(t: TextoVoz):
     if not voz.tts_disponible():
         return JSONResponse({"detalle": "Piper no disponible; use la voz del navegador"}, status_code=501)
+    segmentos = [s for s in (t.segmentos or []) if isinstance(s, dict) and s.get("texto")][:12]
+    if not segmentos:
+        segmentos = personalidad.segmentar_texto((t.texto or "")[:2500])
+    if not segmentos:
+        raise HTTPException(400, "No hay texto para leer")
     inicio = time.perf_counter()
-    wav = await asyncio.to_thread(voz.sintetizar, t.texto[:2500])
+    try:
+        wav, duraciones = await asyncio.to_thread(voz.sintetizar_segmentos, segmentos, t.voz, t.velocidad)
+    except Exception as e:  # noqa: BLE001
+        print("Error en TTS:", repr(e))
+        raise HTTPException(500, f"No se pudo generar la voz: {e}") from e
     return Response(wav, media_type="audio/wav",
-                    headers={"X-TTS-ms": str(round((time.perf_counter() - inicio) * 1000))})
+                    headers={"X-TTS-ms": str(round((time.perf_counter() - inicio) * 1000)),
+                             "X-Segmentos": ",".join(map(str, duraciones)),
+                             "Access-Control-Expose-Headers": "X-TTS-ms, X-Segmentos"})
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +480,8 @@ def actualizar_caso(cid: uuid.UUID, c: CambioCaso):
 
 @app.get("/api/casos/{cid}")
 def ver_caso(cid: uuid.UUID):
-    caso = db.uno("SELECT c.id, c.estado, c.notas, c.area, p.id AS consultante_id, p.nombre, p.documento, p.telefono, "
+    caso = db.uno("SELECT c.id, c.estado, c.notas, c.area, c.alias, c.bloqueada, c.motivo_cierre, "
+                  "p.id AS consultante_id, p.nombre, p.documento, p.telefono, "
                   "p.correo, p.municipio, p.zona FROM conversaciones c LEFT JOIN consultantes p ON p.id=c.consultante_id "
                   "WHERE c.id=%s", (cid,))
     if not caso:
