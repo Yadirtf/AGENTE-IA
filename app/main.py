@@ -225,7 +225,11 @@ async def stt(audio: UploadFile = File(...)):
     if not voz.stt_disponible():
         raise HTTPException(501, "faster-whisper no está instalado")
     datos = await audio.read()
-    return await asyncio.to_thread(voz.transcribir, datos)
+    try:
+        return await asyncio.to_thread(voz.transcribir, datos)
+    except Exception as e:  # noqa: BLE001
+        print("Error en STT:", repr(e))
+        raise HTTPException(500, f"No se pudo transcribir el audio: {e}") from e
 
 
 class TextoVoz(BaseModel):
