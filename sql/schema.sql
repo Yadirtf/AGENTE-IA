@@ -184,3 +184,10 @@ ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS motivo_cierre TEXT;
 -- Lo que Amparo dijo en voz (guion hablado con emoción por frase) y el tipo de respuesta.
 ALTER TABLE mensajes ADD COLUMN IF NOT EXISTS guion JSONB;
 ALTER TABLE mensajes ADD COLUMN IF NOT EXISTS tipo TEXT;  -- (agente) orientacion | identidad | fuera_tema | aviso | cierre
+
+-- ---------------------------------------------------------------------
+-- (v4) Agenda de citas por voz: Amparo va llenando la cita durante la llamada
+-- ---------------------------------------------------------------------
+-- Estado del diálogo de agenda en curso (paso, lugar, día, hora, datos…). NULL si no se está agendando.
+ALTER TABLE conversaciones ADD COLUMN IF NOT EXISTS agenda JSONB;
+ALTER TABLE citas_consultorio ADD COLUMN IF NOT EXISTS origen TEXT DEFAULT 'formulario';  -- formulario | llamada

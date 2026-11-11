@@ -8,13 +8,14 @@ import json
 import re
 import time
 import uuid
+from datetime import date
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, evaluacion, llm, orientacion, personalidad, rag, voz
+from . import agenda, config, db, evaluacion, llm, orientacion, personalidad, rag, voz
 
 app = FastAPI(title="Amparo · Orientación jurídica básica")
 WEB = config.RAIZ / "web"
@@ -301,6 +302,50 @@ class TurnoLlamada(BaseModel):
     ms_stt: int | None = None
 
 
+def _contexto_agenda(cid: str, alias: str | None) -> agenda.Contexto:
+    entidades_cita = db.consultar("SELECT id, nombre, horario FROM entidades WHERE atiende_citas "
+                                  "ORDER BY (nombre ILIKE 'Consultorio%%') DESC, id")
+
+    def crear(d: dict) -> dict:
+        p = _guardar_consultante(Consultante(nombre=d["nombre"], documento=d["documento"], telefono=d["telefono"],
+                                             consentimiento=True, conversacion_id=cid))
+        try:
+            fila = _insertar_cita(cid, p["id"], d["entidad_id"], d["fecha"], d["hora"], d["modalidad"],
+                                  d["motivo"], origen="llamada")
+        except HTTPException as e:
+            if e.status_code == 409:
+                raise agenda.HorarioOcupado() from e
+            raise
+        return fila | {"consultante": p["nombre"], "telefono": p["telefono"], "documento": p["documento"]}
+
+    return agenda.Contexto(entidades=entidades_cita, horas_libres=horas_libres, crear=crear, alias=alias)
+
+
+async def _turno_agenda(texto: str, cid: str, conv: dict, nombre: str | None, historial: list[dict], dichas: list[dict]):
+    """Un paso de la agenda por voz: interpreta, valida contra la disponibilidad real y responde."""
+    previas = [m["contenido"] for m in historial if m["rol"] == "usuario" and not agenda.quiere_agendar(m["contenido"])]
+    motivo = " / ".join(previas[-2:]) or "Consulta hecha en la llamada en vivo"
+    ctx = await asyncio.to_thread(_contexto_agenda, cid, nombre)
+    if not ctx.entidades:
+        frase = {"emocion": "calida", "texto": "Uy, por ahora no tengo entidades con agenda disponible. "
+                                                "Puede usar el botón de agendar cita en la pantalla."}
+        dichas.append(frase)
+        yield _evento("frase", frase)
+        return
+    res = await asyncio.to_thread(agenda.procesar, texto, conv["agenda"], ctx, motivo)
+    db.ejecutar("UPDATE conversaciones SET agenda=%s, actualizada=now() WHERE id=%s",
+                (json.dumps(res.estado, ensure_ascii=False) if res.estado else None, cid))
+    if res.estado:
+        yield _evento("agenda", agenda.resumen_publico(res.estado))
+    elif res.cancelada:
+        yield _evento("agenda", None)
+    if res.cita:
+        yield _evento("cita", res.cita)
+    for frase in res.frases:
+        dichas.append(frase)
+        yield _evento("frase", frase)
+
+
 @app.post("/api/llamada")
 async def llamada(c: TurnoLlamada):
     """Un turno de la llamada. Emite cada frase apenas está completa para que la voz empiece de inmediato.
@@ -318,13 +363,13 @@ async def llamada(c: TurnoLlamada):
         metricas = {"stt": c.ms_stt}
         cid, conv = c.conversacion_id, None
         if cid:
-            conv = db.uno("SELECT id, area, alias, advertencias, bloqueada FROM conversaciones WHERE id=%s", (cid,))
+            conv = db.uno("SELECT id, area, alias, advertencias, bloqueada, agenda FROM conversaciones WHERE id=%s", (cid,))
         if conv and conv["bloqueada"]:
             yield _evento("colgar", {"motivo": "Esta llamada se cerró. Recargue la página para empezar de nuevo."})
             return
         if not conv:
             conv = db.uno("INSERT INTO conversaciones (titulo, alias) VALUES (%s, %s) "
-                          "RETURNING id, area, alias, advertencias, bloqueada", ("📞 " + texto[:76], alias))
+                          "RETURNING id, area, alias, advertencias, bloqueada, agenda", ("📞 " + texto[:76], alias))
             cid = str(conv["id"])
             _cambiar_estado(cid, "abierto", "Llamada en vivo iniciada")
         nombre = alias or conv["alias"]
@@ -364,6 +409,15 @@ async def llamada(c: TurnoLlamada):
                     db.ejecutar("UPDATE conversaciones SET advertencias=%s WHERE id=%s", (avisos, cid))
                     tipo = "aviso" if avisos < 2 else "cierre"
                 else:
+                    # La agenda por voz va antes que la orientación: si se está agendando, cada turno es un paso.
+                    ultima = next((m["contenido"] for m in reversed(historial) if m["rol"] == "agente"), None)
+                    if conv["agenda"] or agenda.quiere_agendar(texto) or agenda.acepta_oferta(texto, ultima):
+                        estado["tipo"] = "agenda"
+                        async for ev in _turno_agenda(texto, cid, conv, nombre, historial, dichas):
+                            yield ev
+                        estado["completa"] = True
+                        yield _evento("fin", {"metricas": metricas, "tipo": "agenda"})
+                        return
                     tipo = personalidad.detectar_identidad(texto) or ("fuera_tema" if personalidad.fuera_de_tema(texto) else None)
                 if tipo:
                     estado["tipo"] = tipo
@@ -640,14 +694,27 @@ def historial_caso(cid: uuid.UUID):
     return filas
 
 
-HORAS = ["08:00", "09:00", "10:00", "11:00", "14:00", "15:00", "16:00"]
+HORAS = agenda.HORAS
+
+
+def _ocupadas(entidad_id: int, fecha) -> set[str]:
+    return {f["h"] for f in db.consultar(
+        "SELECT to_char(hora,'HH24:MI') AS h FROM citas_consultorio WHERE entidad_id=%s AND fecha=%s AND estado<>'cancelada'",
+        (entidad_id, fecha))}
+
+
+def horas_libres(entidad_id: int, fecha) -> list[str]:
+    """Horas libres de un día hábil (lunes a viernes sin festivos); un día no hábil no tiene horas."""
+    d = date.fromisoformat(fecha) if isinstance(fecha, str) else fecha
+    if not agenda.es_habil(d) or d <= agenda.hoy_colombia():
+        return []
+    ocupadas = _ocupadas(entidad_id, d)
+    return [h for h in HORAS if h not in ocupadas]
 
 
 @app.get("/api/citas/disponibilidad")
 def disponibilidad(entidad_id: int, fecha: str):
-    ocupadas = {f["h"] for f in db.consultar(
-        "SELECT to_char(hora,'HH24:MI') AS h FROM citas_consultorio WHERE entidad_id=%s AND fecha=%s AND estado<>'cancelada'",
-        (entidad_id, fecha))}
+    ocupadas = _ocupadas(entidad_id, fecha)
     return [{"hora": h, "libre": h not in ocupadas} for h in HORAS]
 
 
@@ -679,19 +746,31 @@ def agendar_cita(c: Cita):
         pid = _guardar_consultante(c.consultante)["id"]
     if not pid:
         raise HTTPException(400, "Faltan los datos del consultante")
-    if c.hora not in HORAS:
+    return _insertar_cita(c.conversacion_id, pid, c.entidad_id, c.fecha, c.hora, c.modalidad, c.motivo)
+
+
+def _insertar_cita(cid, pid: int, entidad_id: int, fecha: str, hora: str, modalidad: str, motivo: str | None,
+                   origen: str = "formulario") -> dict:
+    """Crea la cita validando el horario de atención. La usan el formulario y la agenda por voz."""
+    if hora not in HORAS:
         raise HTTPException(400, "Horario no disponible")
     try:
-        fila = db.uno("INSERT INTO citas_consultorio (conversacion_id, consultante_id, entidad_id, fecha, hora, modalidad, motivo) "
-                      "VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING *",
-                      (c.conversacion_id, pid, c.entidad_id, c.fecha, c.hora, c.modalidad, c.motivo))
+        d = date.fromisoformat(fecha)
+    except ValueError as e:
+        raise HTTPException(400, "Fecha inválida") from e
+    if not agenda.es_habil(d):
+        raise HTTPException(400, "Solo se agenda en días hábiles (lunes a viernes, sin festivos)")
+    try:
+        fila = db.uno("INSERT INTO citas_consultorio (conversacion_id, consultante_id, entidad_id, fecha, hora, modalidad, motivo, origen) "
+                      "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *",
+                      (cid, pid, entidad_id, fecha, hora, modalidad, motivo, origen))
     except Exception as e:  # noqa: BLE001
         if "citas_horario_uq" in str(e):
             raise HTTPException(409, "Ese horario acaba de ser tomado. Elija otro.") from e
         raise
-    if c.conversacion_id:
-        _cambiar_estado(c.conversacion_id, "remitido", f"Cita agendada para el {c.fecha} a las {c.hora}")
-    return _cita_json(fila) | {"entidad": db.uno("SELECT nombre, horario FROM entidades WHERE id=%s", (c.entidad_id,))}
+    if cid:
+        _cambiar_estado(cid, "remitido", f"Cita agendada para el {fecha} a las {hora}")
+    return _cita_json(fila) | {"entidad": db.uno("SELECT nombre, horario FROM entidades WHERE id=%s", (entidad_id,))}
 
 
 @app.get("/api/citas")

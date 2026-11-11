@@ -314,6 +314,8 @@
           encolar(datos);
         } else if (tipo === "fuentes") pintarFuentes(datos);
         else if (tipo === "emergencia") mostrarEmergencia(datos);
+        else if (tipo === "agenda") pintarAgenda(datos);
+        else if (tipo === "cita") pintarCita(datos);
         else if (tipo === "colgar") L.colgarAlTerminar = datos.motivo;
         else if (tipo === "error") throw new Error(datos.mensaje);
       }
@@ -330,6 +332,54 @@
       }
     }
   }
+  /* ---------- Agenda por voz: la ficha de la cita se llena mientras se habla ---------- */
+  const CAMPOS_AGENDA = [
+    ["entidad", "Lugar"], ["fecha", "Día"], ["hora", "Hora"], ["modalidad", "Modalidad"],
+    ["nombre", "A nombre de"], ["telefono", "Celular"], ["documento", "Cédula"], ["autorizacion", "Datos (Ley 1581)"],
+  ];
+  const MODOS = { presencial: "Presencial", virtual: "Virtual", telefonica: "Por teléfono" };
+  const fechaLarga = (iso) => new Date(iso + "T12:00").toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" });
+  const horaLarga = (h) => { const n = +h.slice(0, 2); return `${n > 12 ? n - 12 : n}:${h.slice(3)} ${n < 12 ? "a. m." : "p. m."}`; };
+  function valorAgenda(k, v) {
+    if (v === null || v === undefined || v === "") return "";
+    if (k === "fecha") return fechaLarga(v);
+    if (k === "hora") return horaLarga(v);
+    if (k === "modalidad") return MODOS[v] || v;
+    if (k === "telefono") return v.replace(/(\d{3})(\d{3})(\d+)/, "$1 $2 $3");
+    if (k === "autorizacion") return v ? "Autorizado" : "";
+    return v;
+  }
+  function pintarAgenda(a) {
+    const caja = $l("#ll-agenda");
+    if (!a) { caja.hidden = true; caja.innerHTML = ""; return; }
+    const pasoCampo = a.paso === "corregir" || a.paso === "confirmar" ? null : a.paso;
+    caja.hidden = false;
+    caja.className = "ll-agenda";
+    caja.innerHTML = `<div class="ll-agenda__cab"><span class="sobretitulo">Agendando su cita</span>
+        <small>${a.paso === "confirmar" ? "Esperando su confirmación" : a.paso === "corregir" ? "Corrigiendo" : "Paso a paso, por voz"}</small></div>
+      <dl>${CAMPOS_AGENDA.map(([k, et]) => {
+        const v = valorAgenda(k, a[k]);
+        return `<div class="${v ? "listo" : ""} ${k === pasoCampo ? "actual" : ""}"><dt>${et}</dt><dd>${v ? esc(v) : k === pasoCampo ? "…escuchando" : "—"}</dd></div>`;
+      }).join("")}</dl>`;
+  }
+  function pintarCita(c) {
+    const caja = $l("#ll-agenda");
+    caja.hidden = false;
+    caja.className = "ll-agenda ll-agenda--lista";
+    caja.innerHTML = `<div class="ll-agenda__sello">AGENDADA</div>
+      <span class="sobretitulo">Constancia de cita Nº ${String(c.id).padStart(5, "0")}</span>
+      <b class="ll-agenda__lugar">${esc(c.entidad?.nombre || "")}</b>
+      <p class="ll-agenda__cuando">${esc(fechaLarga(c.fecha))} · ${esc(horaLarga(c.hora))} · ${esc(MODOS[c.modalidad] || c.modalidad)}</p>
+      <p class="nota">A nombre de ${esc(c.consultante || "")}${c.entidad?.horario ? ` · Horario: ${esc(c.entidad.horario)}` : ""}</p>
+      <button class="btn btn--chico" type="button">Ver constancia</button>`;
+    $("button", caja).onclick = () => {
+      estado.conversacion = L.cid;
+      constancia(c, { nombre: c.consultante, documento: c.documento || "", motivo: c.motivo });
+      $l("#dlg-cita").showModal();
+    };
+    toast("Cita agendada por voz · el caso pasó a «Remitido al consultorio»");
+  }
+
   function pintarFuentes(lista) {
     if (!L.burbuja) L.burbuja = burbujaAmparo();
     $(".sub__fuentes", L.burbuja).innerHTML = lista.map((f) => `<span title="${esc(f.seccion)}">📚 ${esc(f.fuente || f.titulo)}</span>`).join("");
@@ -380,6 +430,7 @@
       silenciado: false, grabando: false, ruido: 0.008, burbuja: null, inicio: Date.now() });
     subs.innerHTML = "";
     $l("#ll-metricas").textContent = "";
+    pintarAgenda(null);
     const conWhisper = estado.sistema?.stt !== false;
     if (conWhisper) {
       L.proc = L.ctx.createScriptProcessor(2048, 1, 1);
