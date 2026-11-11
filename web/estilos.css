@@ -728,3 +728,27 @@ main { padding: 0; }
   .llamada__panel { max-height: 60vh; }
   .llamada__nombre { font-size: 36px; }
 }
+
+/* Agenda por voz: ficha de la cita que se llena mientras se habla */
+.ll-agenda { position: relative; border: 1.5px solid var(--regla-fuerte); border-radius: 14px; padding: 12px 14px; margin: 4px 0 6px; background: var(--papel) var(--grano); animation: aparecer .35s both; }
+.ll-agenda__cab { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.ll-agenda__cab small { font-size: 11.5px; color: var(--tinta-3); }
+.ll-agenda dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; margin: 0; }
+.ll-agenda dl div { min-width: 0; padding: 4px 0 4px 10px; border-left: 2px solid var(--regla); transition: border-color .3s, background .3s; }
+.ll-agenda dt { font: 600 9.5px/1.2 var(--sans); letter-spacing: .12em; text-transform: uppercase; color: var(--tinta-3); }
+.ll-agenda dd { margin: 2px 0 0; font: 500 14px/1.3 var(--serif); overflow-wrap: anywhere; color: var(--tinta-3); }
+.ll-agenda dl div.listo { border-left-color: var(--salvia); }
+.ll-agenda dl div.listo dd { color: var(--tinta); }
+.ll-agenda dl div.actual { border-left-color: var(--lacre); background: color-mix(in srgb, var(--lacre) 6%, transparent); }
+.ll-agenda dl div.actual dd { color: var(--lacre); font-style: italic; animation: latido 1.4s infinite; }
+.ll-agenda--lista { border-color: color-mix(in srgb, var(--salvia) 60%, transparent); display: grid; gap: 4px; padding-right: 110px; }
+.ll-agenda--lista p { margin: 0; }
+.ll-agenda--lista .btn { justify-self: start; margin-top: 4px; }
+.ll-agenda__lugar { font: 500 18px var(--serif); }
+.ll-agenda__cuando { font: 500 14px var(--sans); }
+.ll-agenda__cuando::first-letter { text-transform: uppercase; }
+.ll-agenda__sello { position: absolute; right: 14px; top: 14px; transform: rotate(-12deg); border: 3px double var(--salvia); color: var(--salvia); font: 700 12px var(--mono); letter-spacing: .15em; padding: 5px 9px; border-radius: 6px; filter: url(#tinta); animation: golpe .55s cubic-bezier(.2,1.6,.4,1) both; }
+@media (max-width: 520px) {
+  .ll-agenda dl { grid-template-columns: 1fr; }
+  .ll-agenda--lista { padding-right: 14px; padding-top: 48px; }
+}
